@@ -1,0 +1,15 @@
+.{
+    .name = .wormhole,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.2",
+    .fingerprint = 0xd0888657d7145c9a,
+
+    .paths = .{
+        "build.zig.zon",
+        "build.zig",
+        "src",
+    },
+
+    .dependencies = .{
+    },
+}
