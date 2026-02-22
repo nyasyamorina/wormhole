@@ -11,5 +11,17 @@
     },
 
     .dependencies = .{
+        .vulkan_zig = .{
+            .url = "https://github.com/Snektron/vulkan-zig/archive/refs/heads/zig-0.15-compat.tar.gz",
+            .hash = "vulkan-0.0.0-r7Ytx6FIAwD3QyrrJhvObO0YSZ6WEkMGSCPKbhM__HFd",
+        },
+        .vk_hdrs = .{
+            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.344.tar.gz",
+            .hash = "N-V-__8AALnKOwISs8TmtQCFcJgDTE9kRnMhQCrbaafF5DD0",
+        },
+        .nyazglfw = .{
+            .url = "https://github.com/nyasyamorina/nyazglfw/archive/refs/heads/main.tar.gz",
+            .hash = "nyazglfw-0.1.1-axZni4gbAQDSMSeHaB1sM_4stUNPyXzgp5MC_9qB-oRu",
+        },
     },
 }
