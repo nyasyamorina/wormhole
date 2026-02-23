@@ -21,7 +21,10 @@
         },
         .nyazglfw = .{
             .url = "https://github.com/nyasyamorina/nyazglfw/archive/refs/heads/main.tar.gz",
-            .hash = "nyazglfw-0.1.1-axZni4gbAQDSMSeHaB1sM_4stUNPyXzgp5MC_9qB-oRu",
+            .hash = "nyazglfw-0.1.2-axZni7sdAQACQGksgQ6ufkG4ugZ3fFK-PQNkBHNYhs84",
+        },
+        .nyazrc = .{
+            .path = "../nyazrc",
         },
     },
 }

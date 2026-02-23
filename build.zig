@@ -4,13 +4,42 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
 
+    //const vulkan_dll_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
+
+    const nyazrc = b.dependency("nyazrc", .{
+        .optimize = optimize,
+        .target = target,
+    });
+    const rc = nyazrc.module("nyazrc");
+
     const vk_hdrs = b.dependency("vk_hdrs", .{});
     const vk_xml = vk_hdrs.path("registry/vk.xml");
-    const vulkan_zig = b.dependency("vulkan_zig", .{ .registry = vk_xml });
+    const vulkan_zig = b.dependency("vulkan_zig", .{
+        .registry = vk_xml,
+        .optimize = optimize,
+        .target = target,
+    });
     const vk = vulkan_zig.module("vulkan-zig");
 
-    const nyazglfw = b.dependency("nyazglfw", .{});
+    const nyazglfw = b.dependency("nyazglfw", .{
+        .optimize = optimize,
+        .target = target,
+    });
     const glfw = nyazglfw.module("glfw");
+
+    const nyazvk = b.addModule("nyazvk", .{
+        .root_source_file = b.path("src/nyazvk/nyazvk.zig"),
+        .optimize = optimize,
+        .target = target,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "vulkan-zig", .module = vk },
+            .{ .name = "glfw", .module = glfw },
+            .{ .name = "nyazrc", .module = rc },
+        },
+    });
+    //nyazvk.linkSystemLibrary(vulkan_dll_name, .{});
+    nyazvk.linkSystemLibrary("glfw3", .{});
 
     const main_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -20,9 +49,11 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "vulkan-zig", .module = vk },
             .{ .name = "glfw", .module = glfw },
+            .{ .name = "nyazrc", .module = rc },
+            .{ .name = "nyazvk", .module = nyazvk },
         },
     });
-    main_module.linkSystemLibrary("vulkan", .{});
+    //nyazvk.linkSystemLibrary(vulkan_dll_name, .{});
     main_module.linkSystemLibrary("glfw3", .{});
 
     b.installArtifact(b.addExecutable(.{
