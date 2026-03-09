@@ -27,20 +27,6 @@ pub fn build(b: *std.Build) void {
     });
     const glfw = nyazglfw.module("glfw");
 
-    const nyazvk = b.addModule("nyazvk", .{
-        .root_source_file = b.path("src/nyazvk/nyazvk.zig"),
-        .optimize = optimize,
-        .target = target,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "vulkan-zig", .module = vk },
-            .{ .name = "glfw", .module = glfw },
-            .{ .name = "nyazrc", .module = rc },
-        },
-    });
-    //nyazvk.linkSystemLibrary(vulkan_dll_name, .{});
-    nyazvk.linkSystemLibrary("glfw3", .{});
-
     const main_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .optimize = optimize,
@@ -50,10 +36,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "vulkan-zig", .module = vk },
             .{ .name = "glfw", .module = glfw },
             .{ .name = "nyazrc", .module = rc },
-            .{ .name = "nyazvk", .module = nyazvk },
         },
     });
-    //nyazvk.linkSystemLibrary(vulkan_dll_name, .{});
+    //main_module.linkSystemLibrary(vulkan_dll_name, .{});
     main_module.linkSystemLibrary("glfw3", .{});
 
     b.installArtifact(b.addExecutable(.{

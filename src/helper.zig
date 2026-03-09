@@ -23,18 +23,9 @@ pub fn logger(comptime level: std.log.Level, comptime scope: @Type(.enum_literal
 }
 
 
-var debug_alloc: if (is_safe_mode) std.heap.DebugAllocator(.{}) else void = undefined;
-pub var allocator: std.mem.Allocator = undefined;
+var debug_alloc: if (is_safe_mode) std.heap.DebugAllocator(.{}) else void = if (is_safe_mode) .init else undefined;
+pub var allocator: std.mem.Allocator = if (is_safe_mode) debug_alloc.allocator() else std.heap.c_allocator;
 
-pub fn initAllocator() void {
-    if (is_safe_mode) {
-        debug_alloc = @TypeOf(debug_alloc).init;
-        allocator = debug_alloc.allocator();
-    } else {
-        //allocator = std.heap.smp_allocator;
-        allocator = std.heap.c_allocator;
-    }
-}
 pub fn deinitAllocator() if (is_safe_mode) std.heap.Check else void {
     if (is_safe_mode) {
         return debug_alloc.deinit();

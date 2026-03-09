@@ -8,14 +8,14 @@ const VulkanContext = @import("VulkanContext.zig");
 
 pub const std_options: std.Options = .{
     .logFn = helper.logger,
+    .fmt_max_depth = 10,
 };
 
 pub fn main() !void {
+    defer _ = helper.deinitAllocator();
+
     if (!glfw.init()) return error.FaildToInitGlfw;
     defer glfw.terminate();
-
-    helper.initAllocator();
-    defer _ = helper.deinitAllocator();
 
     var vk_ctx: VulkanContext = try .init();
     defer vk_ctx.deinit();
