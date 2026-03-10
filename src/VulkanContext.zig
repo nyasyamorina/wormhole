@@ -3,6 +3,8 @@ const vk = @import("vulkan-zig");
 const glfw = @import("glfw");
 
 const helper = @import("helper.zig");
+const shader_layout = @import("shader_layout.zig");
+const Stage = shader_layout.Stage;
 
 
 window: *glfw.Window,
@@ -10,6 +12,7 @@ instance: vk.InstanceProxy,
 debug_messenger: vk.DebugUtilsMessengerEXT,
 surface: vk.SurfaceKHR,
 physical_device: vk.PhysicalDevice,
+memory_type_fiinder: MemoryTypeFinder,
 device: vk.DeviceProxy,
 queue: vk.QueueProxy,
 swapchain_info: vk.SwapchainCreateInfoKHR,
@@ -17,6 +20,18 @@ swapchain: vk.SwapchainKHR = .null_handle,
 outdated_swapchain: bool = true,
 swapchain_views: std.ArrayList(vk.ImageView) = .empty,
 command_pool: vk.CommandPool,
+
+uniform_memory: vk.DeviceMemory,
+uniform_buffers: [Stage.all.len]vk.Buffer,
+uniform_offsets_and_sizes: [Stage.all.len][2]u64,
+
+pixel_count: u64 = 0,
+storage_memory: vk.DeviceMemory = .null_handle,
+ray_map: vk.Buffer = .null_handle,
+
+set_layouts: [Stage.all.len]vk.DescriptorSetLayout = [1]vk.DescriptorSetLayout { .null_handle } ** Stage.all.len,
+pipeline_layouts: [Stage.all.len]vk.PipelineLayout = [1]vk.PipelineLayout { .null_handle } ** Stage.all.len,
+pipelines: [Stage.all.len]vk.Pipeline = [1]vk.Pipeline { .null_handle } ** Stage.all.len,
 
 
 const VulkanContext = @This();
@@ -26,17 +41,17 @@ var instance_wrapper: vk.InstanceWrapper = .{ .dispatch = .{} };
 var device_wrapper: vk.DeviceWrapper = .{ .dispatch = .{} };
 
 pub fn init() !VulkanContext {
-    const window = try createWindow();
+    const window = try _createWindow();
     errdefer window.destroy();
 
-    const instance = try createInstance(helper.allocator);
+    const instance = try _createInstance(helper.allocator);
     errdefer helper.allocator.destroy(instance.wrapper);
     errdefer instance.destroyInstance(null);
 
-    const debug_messenger = try createDebugMessenger(instance);
+    const debug_messenger = try _createDebugMessenger(instance);
     errdefer instance.destroyDebugUtilsMessengerEXT(debug_messenger, null);
 
-    const surface = try createSurface(instance, window);
+    const surface = try _createSurface(instance, window);
     errdefer instance.destroySurfaceKHR(surface, null);
 
     var target_features: PhysicalDeviceFeatures(&.{vk.PhysicalDeviceVulkan13Features, vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT}) = .{};
@@ -51,17 +66,23 @@ pub fn init() !VulkanContext {
         vk.extensions.khr_create_renderpass_2.name,
     };
 
-    const physical_device, const queue_family = try pickPhysicalDevice(helper.allocator, instance, surface, target_features, &target_extensions);
+    const physical_device, const queue_family = try _pickPhysicalDevice(helper.allocator, instance, surface, target_features, &target_extensions);
+    const memory_type_fiinder: MemoryTypeFinder = .init(instance, physical_device);
 
-    const device = try createDevice(instance, physical_device, queue_family, target_features, &target_extensions);
+    const device = try _createDevice(instance, physical_device, queue_family, target_features, &target_extensions);
     errdefer helper.allocator.destroy(device.wrapper);
     errdefer device.destroyDevice(null);
 
-    const queue = getQueue(device, queue_family);
-    const swapchain_info = try getSwapchainInfo(helper.allocator, instance, physical_device, window, surface);
+    const queue = _getQueue(device, queue_family);
+    const swapchain_info = try _getSwapchainInfo(helper.allocator, instance, physical_device, window, surface);
 
-    const command_pool = try createCommandPool(device, queue_family);
+    const command_pool = try _createCommandPool(device, queue_family);
     errdefer device.destroyCommandPool(command_pool, null);
+
+    const uniform_buffers = try _createUniformBuffers(device);
+    errdefer for (uniform_buffers) |b| device.destroyBuffer(b, null);
+    const uniform_memory, const uniform_offsets_and_sizes = try _allocAndBindUniformMemory(device, memory_type_fiinder, uniform_buffers);
+    errdefer device.freeMemory(uniform_memory, null);
 
     return .{
         .window = window,
@@ -69,10 +90,14 @@ pub fn init() !VulkanContext {
         .debug_messenger = debug_messenger,
         .surface = surface,
         .physical_device = physical_device,
+        .memory_type_fiinder = memory_type_fiinder,
         .device = device,
         .queue = queue,
         .swapchain_info = swapchain_info,
         .command_pool = command_pool,
+        .uniform_memory = uniform_memory,
+        .uniform_buffers = uniform_buffers,
+        .uniform_offsets_and_sizes = uniform_offsets_and_sizes,
     };
 }
 
@@ -86,10 +111,98 @@ pub fn deinit(self: *VulkanContext) void {
     defer self.swapchain_views.deinit(helper.allocator);
     defer for (self.swapchain_views.items) |v| self.device.destroyImageView(v, null);
     defer self.device.destroyCommandPool(self.command_pool, null);
+    defer for (self.uniform_buffers) |b| self.device.destroyBuffer(b, null);
+    defer self.device.freeMemory(self.uniform_memory, null);
+
+    defer self.device.destroyBuffer(self.ray_map, null);
+    defer self.device.freeMemory(self.storage_memory, null);
+
+    defer for (self.set_layouts) |l| self.device.destroyDescriptorSetLayout(l, null);
+    defer for (self.pipeline_layouts) |l| self.device.destroyPipelineLayout(l, null);
+    defer for (self.pipelines) |p| self.device.destroyPipeline(p, null);
 }
 
+pub const MemoryTypeFinder = struct {
+    count: u6,
+    memory_type_flags: [32]vk.MemoryPropertyFlags,
 
-fn createWindow() !*glfw.Window {
+    pub fn init(instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice) MemoryTypeFinder {
+        const props = instance.getPhysicalDeviceMemoryProperties(physical_device);
+
+        var self: MemoryTypeFinder = undefined;
+        self.count = @intCast(props.memory_type_count);
+        for (0 .. 32) |idx| self.memory_type_flags[idx] = props.memory_types[idx].property_flags;
+        return self;
+    }
+
+    pub fn find(self: MemoryTypeFinder, mask: u32, props: vk.MemoryPropertyFlags) ?u5 {
+        var idx: u6 = 0;
+        var bit: u32 = 1;
+        while (idx < self.count) : ({ idx += 1; bit <<= 1; }) {
+            if (mask & bit != 0 and self.memory_type_flags[idx].contains(props)) {
+                return @intCast(idx);
+            }
+        } else return null;
+    }
+};
+
+fn _createUniformBuffers(device: vk.DeviceProxy) ![Stage.all.len]vk.Buffer {
+    var buffers: [Stage.all.len]vk.Buffer = [1]vk.Buffer { .null_handle } ** Stage.all.len;
+    var inited: usize = 0;
+    errdefer for (buffers[0 .. inited]) |b| if (b != .null_handle) device.destroyBuffer(b, null);
+
+    inline for (Stage.all) |stage| {
+        buffers[@intFromEnum(stage)] = try device.createBuffer(&.{
+            .sharing_mode = .exclusive,
+            .size = @sizeOf(stage.getComptimeNamed(shader_layout.uniforms)),
+            .usage = .{ .uniform_buffer_bit = true },
+        }, null);
+        inited += 1;
+    }
+    return buffers;
+}
+fn _allocAndBindUniformMemory(device: vk.DeviceProxy, finder: MemoryTypeFinder, buffers: [Stage.all.len]vk.Buffer) !struct {vk.DeviceMemory, [Stage.all.len][2]u64} {
+    var offsets_and_sizes: [buffers.len][2]u64 = undefined;
+    inline for (Stage.all) |stage| {
+        offsets_and_sizes[@intFromEnum(stage)][1] = @sizeOf(stage.getComptimeNamed(shader_layout.uniforms));
+    }
+
+    var total_size: u64 = 0;
+    var mem_type_mask: u32 = std.math.maxInt(u32);
+    for (buffers, 0..) |b, idx| {
+        const mem_req = device.getBufferMemoryRequirements(b);
+
+        total_size += _aligAppendSize(total_size, mem_req.alignment);
+        offsets_and_sizes[idx][0] = total_size;
+
+        total_size += mem_req.size;
+        mem_type_mask &= mem_req.memory_type_bits;
+    }
+
+    const mem_type = finder.find(mem_type_mask, .{
+        .host_visible_bit = true,
+        .host_coherent_bit = true,
+    }) orelse return error.FailedToFindSuitableMemoryType;
+
+    const memory = try device.allocateMemory(&.{
+        .memory_type_index = mem_type,
+        .allocation_size = total_size,
+    }, null);
+    errdefer device.freeMemory(memory, null);
+
+    for (buffers, offsets_and_sizes) |b, os| {
+        try device.bindBufferMemory(b, memory, os[0]);
+    }
+
+    return .{memory, offsets_and_sizes};
+}
+
+fn _aligAppendSize(size: u64, alignment: u64) u64 {
+    std.debug.assert(std.math.isPowerOfTwo(alignment));
+    return (alignment - (size & (alignment - 1))) & (alignment - 1);
+}
+
+fn _createWindow() !*glfw.Window {
     glfw.Window.Hint.set.clientApi(.no_api);
     glfw.Window.Hint.set.resizable(true);
     glfw.Window.Hint.set.transparentFramebuffer(true);
@@ -107,7 +220,7 @@ fn createWindow() !*glfw.Window {
     return window;
 }
 
-fn createInstance(allocator: std.mem.Allocator) !vk.InstanceProxy {
+fn _createInstance(allocator: std.mem.Allocator) !vk.InstanceProxy {
     const vk_base: vk.BaseWrapper = .load(@as(vk.PfnGetInstanceProcAddr, @ptrCast(&glfw.getInstanceProcAddress)));
     const api_version = try vk_base.enumerateInstanceVersion();
 
@@ -199,7 +312,7 @@ fn debugMessengerCallback(m_severity: vk.DebugUtilsMessageSeverityFlagsEXT, m_ty
     return .false;
 }
 
-fn createDebugMessenger(instance: vk.InstanceProxy) !vk.DebugUtilsMessengerEXT {
+fn _createDebugMessenger(instance: vk.InstanceProxy) !vk.DebugUtilsMessengerEXT {
     if (helper.is_debug) {
         return instance.createDebugUtilsMessengerEXT(&.{
             .message_severity = .{
@@ -219,7 +332,7 @@ fn createDebugMessenger(instance: vk.InstanceProxy) !vk.DebugUtilsMessengerEXT {
 }
 
 
-fn createSurface(instance: vk.InstanceProxy, window: *glfw.Window) !vk.SurfaceKHR {
+fn _createSurface(instance: vk.InstanceProxy, window: *glfw.Window) !vk.SurfaceKHR {
     var handle: vk.SurfaceKHR = .null_handle;
     const result: vk.Result = @enumFromInt(@intFromEnum(glfw.glfwCreateWindowSurface(
         @ptrFromInt(@intFromEnum(instance.handle)),
@@ -332,7 +445,7 @@ pub fn PhysicalDeviceFeatures(comptime ExtraFeatures: []const type) type {
     };
 }
 
-fn pickPhysicalDevice(allocator: std.mem.Allocator, instance: vk.InstanceProxy, surface: vk.SurfaceKHR, target_features: anytype, target_extensions: []const [*:0]const u8) !struct {vk.PhysicalDevice, u32} {
+fn _pickPhysicalDevice(allocator: std.mem.Allocator, instance: vk.InstanceProxy, surface: vk.SurfaceKHR, target_features: anytype, target_extensions: []const [*:0]const u8) !struct {vk.PhysicalDevice, u32} {
     const handles = try instance.enumeratePhysicalDevicesAlloc(allocator);
     defer allocator.free(handles);
 
@@ -349,13 +462,13 @@ fn pickPhysicalDevice(allocator: std.mem.Allocator, instance: vk.InstanceProxy, 
             } else continue :next_handle;
         }
 
-        const queue_family = try findGeneralQueueFamily(allocator, instance, p, surface) orelse continue;
+        const queue_family = try _findGeneralQueueFamily(allocator, instance, p, surface) orelse continue;
 
         return .{p, queue_family};
     } else return error.SuitablePhysicalDeviceNotFound;
 }
 
-fn findGeneralQueueFamily(allocator: std.mem.Allocator, instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !?u32 {
+fn _findGeneralQueueFamily(allocator: std.mem.Allocator, instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice, surface: vk.SurfaceKHR) !?u32 {
     const props = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(physical_device, allocator);
     defer allocator.free(props);
 
@@ -373,7 +486,7 @@ fn findGeneralQueueFamily(allocator: std.mem.Allocator, instance: vk.InstancePro
     return null;
 }
 
-fn createDevice(instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice, queue_family: u32, target_features: anytype, target_extensions: []const [*:0]const u8) !vk.DeviceProxy {
+fn _createDevice(instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice, queue_family: u32, target_features: anytype, target_extensions: []const [*:0]const u8) !vk.DeviceProxy {
     const handle = try instance.createDevice(physical_device, &.{
         .p_next = @ptrCast(&target_features.core2),
         .queue_create_info_count = 1,
@@ -390,13 +503,13 @@ fn createDevice(instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice, 
     return .init(handle, &device_wrapper);
 }
 
-fn getQueue(device: vk.DeviceProxy, queue_family: u32) vk.QueueProxy {
+fn _getQueue(device: vk.DeviceProxy, queue_family: u32) vk.QueueProxy {
     const handle = device.getDeviceQueue(queue_family, 0);
     return .init(handle, device.wrapper);
 }
 
 
-fn getSwapchainInfo(allocator: std.mem.Allocator, instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice, window: *glfw.Window, surface: vk.SurfaceKHR) !vk.SwapchainCreateInfoKHR {
+fn _getSwapchainInfo(allocator: std.mem.Allocator, instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice, window: *glfw.Window, surface: vk.SurfaceKHR) !vk.SwapchainCreateInfoKHR {
     var capas = try instance.getPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface);
     std.debug.assert(capas.supported_usage_flags.contains(.{ .storage_bit = true }));
     const image_extent = if (capas.current_extent.width == std.math.maxInt(u32)) blk: {
@@ -433,23 +546,28 @@ fn getSwapchainInfo(allocator: std.mem.Allocator, instance: vk.InstanceProxy, ph
     };
 }
 
-fn recreateSwapchain(allocator: std.mem.Allocator, device: vk.DeviceProxy, info: *vk.SwapchainCreateInfoKHR, old: vk.SwapchainKHR, swapchain_views: *std.ArrayList(vk.ImageView)) vk.SwapchainKHR {
-    // create new swachain from old one
-    info.old_swapchain = old;
-    const handle = try device.createSwapchainKHR(&info, null);
-    errdefer device.destroySwapchainKHR(handle, null);
 
-    // get swapchain images
-    const images = try device.getSwapchainImagesAllocKHR(handle, allocator);
-    defer allocator.free(images);
-    try swapchain_views.ensureTotalCapacity(allocator, images.len);
-    // create new swapchain image views
-    var views: std.ArrayList(vk.ImageView) = try .initCapacity(allocator, images.len);
-    defer views.deinit(allocator);
-    errdefer for (views) |v| device.destroyImageView(v, null);
-    for (images) |i| views.appendAssumeCapacity(try device.createImageView(&.{
-        .image = i,
-        .format = info.image_format,
+fn _createCommandPool(device: vk.DeviceProxy, queue_family: u32) !vk.CommandPool {
+    return device.createCommandPool(&.{
+        .queue_family_index = queue_family,
+    }, null);
+}
+
+fn _createCommandBuffer(device: vk.DeviceProxy, command_pool: vk.CommandPool) !vk.CommandBufferProxy {
+    var handles: [1]vk.CommandBuffer = undefined;
+    try device.allocateCommandBuffers(&.{
+        .level = .primary,
+        .command_pool = command_pool,
+        .command_buffer_count = 1,
+    }, &handles);
+    return .init(handles[0], device.wrapper);
+}
+
+
+fn _createImageView(device: vk.DeviceProxy, image: vk.Image, format: vk.Format) !vk.ImageView {
+    return device.createImageView(&.{
+        .image = image,
+        .format = format,
         .view_type = .@"2d",
         .components = .{
             .r = .identity,
@@ -464,31 +582,71 @@ fn recreateSwapchain(allocator: std.mem.Allocator, device: vk.DeviceProxy, info:
             .base_array_layer = 0,
             .layer_count = 1,
         },
-    }, null));
-
-    // destroy old swapchain image views
-    for (swapchain_views.items) |v| device.destroyImageView(v, null);
-    swapchain_views.clearRetainingCapacity();
-    // destroy old swapchain
-    device.destroySwapchainKHR(old, null);
-    // return
-    swapchain_views.appendSliceAssumeCapacity(views.items);
-    return handle;
-}
-
-
-fn createCommandPool(device: vk.DeviceProxy, queue_family: u32) !vk.CommandPool {
-    return device.createCommandPool(&.{
-        .queue_family_index = queue_family,
     }, null);
 }
 
-fn createCommandBuffer(device: vk.DeviceProxy, command_pool: vk.CommandPool) !vk.CommandBufferProxy {
-    var handles: [1]vk.CommandBuffer = undefined;
-    try device.allocateCommandBuffers(&.{
-        .level = .primary,
-        .command_pool = command_pool,
-        .command_buffer_count = 1,
-    }, &handles);
-    return .init(handles[0], device.wrapper);
+
+pub fn recreateSwapchainStuff(self: *VulkanContext) !void {
+    // create new swapchain
+    self.swapchain_info.old_swapchain = self.swapchain;
+    const swapchain = try self.device.createSwapchainKHR(&self.swapchain_info, null);
+    errdefer self.device.destroySwapchainKHR(swapchain, null);
+
+    // get swapchain images
+    const images = try self.device.getSwapchainImagesAllocKHR(swapchain, helper.allocator);
+    defer helper.allocator.free(images);
+    try self.swapchain_views.ensureTotalCapacity(helper.allocator, images.len);
+    // create new swapchain image views
+    var views: std.ArrayList(vk.ImageView) = try .initCapacity(helper.allocator, images.len);
+    defer views.deinit(helper.allocator);
+    errdefer for (views) |v| self.device.destroyImageView(v, null);
+    for (images) |i| views.appendAssumeCapacity(try _createImageView(self.device, i, self.swapchain_info.image_format));
+
+    const pixel_count = @as(u64, self.swapchain_info.image_extent.width) * self.swapchain_info.image_extent.height;
+    if (pixel_count > self.pixel_count) {
+
+    }
+
+    // destroy old swapchain image views
+    for (self.swapchain_views.items) |v| self.device.destroyImageView(v, null);
+    self.swapchain_views.clearRetainingCapacity();
+    // destroy old swapchain
+    self.device.destroySwapchainKHR(self.swapchain, null);
+
+    // store
+    self.swapchain_views.appendSliceAssumeCapacity(views.items);
+    self.swapchain = swapchain;
+}
+
+pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !void {
+    const module = try self.device.createShaderModule(&.{
+        .code_size = 4 * code.len,
+        .p_code = @ptrCast(code),
+    }, null);
+    defer self.device.destroyShaderModule(module, null);
+
+    const set_layout_info = &stage.getNamedStatic(shader_layout.set_layout_infos);
+    const set_layout = try self.device.createDescriptorSetLayout(set_layout_info, null);
+    errdefer self.device.destroyDescriptorSetLayout(set_layout, null);
+
+    const pipeline_layout = try self.device.createPipelineLayout(&.{
+        .set_layout_count = 1,
+        .p_set_layouts = &.{set_layout}
+    }, null);
+    errdefer self.device.destroyPipelineLayout(pipeline_layout, null);
+
+    var pipeline: vk.Pipeline = .null_handle;
+    _ = try self.device.createComputePipelines(.null_handle, 1, &.{ vk.ComputePipelineCreateInfo {
+        .stage = .{
+            .stage = .{ .compute_bit = true },
+            .module = module,
+            .p_name = "main",
+        },
+        .layout = pipeline_layout,
+        .base_pipeline_index = 0,
+    } }, null, @ptrCast(&pipeline));
+
+    self.set_layouts[@intFromEnum(stage)] = set_layout;
+    self.pipeline_layouts[@intFromEnum(stage)] = pipeline_layout;
+    self.pipelines[@intFromEnum(stage)] = pipeline;
 }

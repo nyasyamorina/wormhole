@@ -24,10 +24,15 @@ pub fn logger(comptime level: std.log.Level, comptime scope: @Type(.enum_literal
 
 
 var debug_alloc: if (is_safe_mode) std.heap.DebugAllocator(.{}) else void = if (is_safe_mode) .init else undefined;
-pub var allocator: std.mem.Allocator = if (is_safe_mode) debug_alloc.allocator() else std.heap.c_allocator;
+pub const allocator: std.mem.Allocator = if (is_safe_mode) debug_alloc.allocator() else std.heap.c_allocator;
 
-pub fn deinitAllocator() if (is_safe_mode) std.heap.Check else void {
+pub const cwd = std.fs.cwd();
+
+pub fn init() !void {
+}
+
+pub fn deinit() void {
     if (is_safe_mode) {
-        return debug_alloc.deinit();
+        _ = debug_alloc.deinit();
     }
 }
