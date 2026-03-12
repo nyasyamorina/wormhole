@@ -5,6 +5,20 @@ const glfw = @import("glfw");
 const helper = @import("helper.zig");
 const shader_layout = @import("shader_layout.zig");
 const Stage = shader_layout.Stage;
+const set_layout = shader_layout.set_layout;
+
+pub const in_flight_count = 2;
+const Fences = [in_flight_count]vk.Fence;
+const Commands = [in_flight_count]vk.CommandBuffer;
+const Semaphores = [in_flight_count]vk.Semaphore;
+const UniformBuffers = [in_flight_count][Stage.all.len]vk.Buffer;
+const UniformOffsets = [in_flight_count][Stage.all.len]u64;
+const StorageImages = [in_flight_count][set_layout.storage_count]vk.Image;
+const StorageViews = [in_flight_count][set_layout.storage_count]vk.ImageView;
+const SetLayouts = [set_layout.layout_count]vk.DescriptorSetLayout;
+const Sets = [in_flight_count][set_layout.layout_count - 1 + Stage.all.len]vk.DescriptorSet;
+const PipelineLayouts = [Stage.all.len]vk.PipelineLayout;
+const Pipelines = [Stage.all.len]vk.Pipeline;
 
 
 window: *glfw.Window,
@@ -14,24 +28,43 @@ surface: vk.SurfaceKHR,
 physical_device: vk.PhysicalDevice,
 memory_type_fiinder: MemoryTypeFinder,
 device: vk.DeviceProxy,
-queue: vk.QueueProxy,
+queue: vk.Queue,
 swapchain_info: vk.SwapchainCreateInfoKHR,
-swapchain: vk.SwapchainKHR = .null_handle,
-outdated_swapchain: bool = true,
-swapchain_views: std.ArrayList(vk.ImageView) = .empty,
 command_pool: vk.CommandPool,
+set_pool: vk.DescriptorPool,
 
+swapchain_outdate: bool = true,
+swapchain: vk.SwapchainKHR = .null_handle,
+swapchain_images: std.ArrayList(vk.Image) = .empty,
+swapchain_views: std.ArrayList(vk.ImageView) = .empty,
+swapchain_semaphores: std.ArrayList(vk.Semaphore) = .empty,
+
+next_frame: u1 = 0, // total 2 frames, one is on rendering, one is on recording
+frame_timestamp: i128,
+frame_fences: Fences,
+acquiring_semaphore: vk.Semaphore,
+computing_commands: Commands,
+computing_semaphores: Semaphores,
+rendering_commands: Commands,
+rendering_semaphores: Semaphores,
+
+uniform_size: u64,
 uniform_memory: vk.DeviceMemory,
-uniform_buffers: [Stage.all.len]vk.Buffer,
-uniform_offsets_and_sizes: [Stage.all.len][2]u64,
+uniform_buffers: UniformBuffers,
+uniform_offsets: UniformOffsets,
 
-pixel_count: u64 = 0,
+storage_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
+storage_size: u64 = 0,
+storage_memory_type: u5 = undefined,
 storage_memory: vk.DeviceMemory = .null_handle,
-ray_map: vk.Buffer = .null_handle,
+storage_images: StorageImages = std.mem.zeroes(StorageImages),
+storage_views: StorageViews = std.mem.zeroes(StorageViews),
 
-set_layouts: [Stage.all.len]vk.DescriptorSetLayout = [1]vk.DescriptorSetLayout { .null_handle } ** Stage.all.len,
-pipeline_layouts: [Stage.all.len]vk.PipelineLayout = [1]vk.PipelineLayout { .null_handle } ** Stage.all.len,
-pipelines: [Stage.all.len]vk.Pipeline = [1]vk.Pipeline { .null_handle } ** Stage.all.len,
+set_layouts: SetLayouts,
+sets: Sets,
+
+pipeline_layouts: PipelineLayouts,
+pipelines: Pipelines = std.mem.zeroes(Pipelines),
 
 
 const VulkanContext = @This();
@@ -39,13 +72,17 @@ const log = std.log.scoped(.VulkanContext);
 
 var instance_wrapper: vk.InstanceWrapper = .{ .dispatch = .{} };
 var device_wrapper: vk.DeviceWrapper = .{ .dispatch = .{} };
+pub const uniform_sizes = blk: {
+    var sizes: [Stage.all.len]u64 = undefined;
+    for (Stage.all) |stage| sizes[@intFromEnum(stage)] = @sizeOf(stage.getComptimeNamed(shader_layout.uniforms));
+    break :blk sizes;
+};
 
 pub fn init() !VulkanContext {
     const window = try _createWindow();
     errdefer window.destroy();
 
     const instance = try _createInstance(helper.allocator);
-    errdefer helper.allocator.destroy(instance.wrapper);
     errdefer instance.destroyInstance(null);
 
     const debug_messenger = try _createDebugMessenger(instance);
@@ -54,8 +91,7 @@ pub fn init() !VulkanContext {
     const surface = try _createSurface(instance, window);
     errdefer instance.destroySurfaceKHR(surface, null);
 
-    var target_features: PhysicalDeviceFeatures(&.{vk.PhysicalDeviceVulkan13Features, vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT}) = .{};
-    target_features.set("dynamic_rendering", true);
+    var target_features: PhysicalDeviceFeatures(&.{vk.PhysicalDeviceSynchronization2Features}) = .{};
     target_features.set("synchronization_2", true);
     _ = target_features.link();
 
@@ -63,14 +99,12 @@ pub fn init() !VulkanContext {
         vk.extensions.khr_swapchain.name,
         vk.extensions.khr_spirv_1_4.name,
         vk.extensions.khr_synchronization_2.name,
-        vk.extensions.khr_create_renderpass_2.name,
     };
 
     const physical_device, const queue_family = try _pickPhysicalDevice(helper.allocator, instance, surface, target_features, &target_extensions);
     const memory_type_fiinder: MemoryTypeFinder = .init(instance, physical_device);
 
     const device = try _createDevice(instance, physical_device, queue_family, target_features, &target_extensions);
-    errdefer helper.allocator.destroy(device.wrapper);
     errdefer device.destroyDevice(null);
 
     const queue = _getQueue(device, queue_family);
@@ -78,11 +112,34 @@ pub fn init() !VulkanContext {
 
     const command_pool = try _createCommandPool(device, queue_family);
     errdefer device.destroyCommandPool(command_pool, null);
+    const set_pool = try _createDescriptorPool(device);
+    errdefer device.destroyDescriptorPool(set_pool, null);
+
+    const frame_fences = try _createFences(device);
+    errdefer for (frame_fences) |f| device.destroyFence(f, null);
+    const acquiring_semephore = try device.createSemaphore(&.{}, null);
+    errdefer device.destroySemaphore(acquiring_semephore, null);
+    const computing_commands = try _createCommands(device, command_pool);
+    const computing_semaphores = try _createSemaphores(device);
+    errdefer for (computing_semaphores) |s| device.destroySemaphore(s, null);
+    const rendering_commands = try _createCommands(device, command_pool);
+    const rendering_semaphores = try _createSemaphores(device);
+    errdefer for (rendering_semaphores) |s| device.destroySemaphore(s, null);
 
     const uniform_buffers = try _createUniformBuffers(device);
-    errdefer for (uniform_buffers) |b| device.destroyBuffer(b, null);
-    const uniform_memory, const uniform_offsets_and_sizes = try _allocAndBindUniformMemory(device, memory_type_fiinder, uniform_buffers);
+    errdefer for(uniform_buffers) |b1| for (b1) |b| device.destroyBuffer(b, null);
+    const uniform_offsets, const uniform_size, const memory_type_mask = _calcuteUniformMemoryInfo(device, uniform_buffers);
+    const memory_type = try memory_type_fiinder.find(memory_type_mask, .{ .host_visible_bit = true, .host_coherent_bit = true });
+    const uniform_memory = try _allocAndBindUniformMemory(device, memory_type, uniform_buffers, uniform_offsets, uniform_size);
     errdefer device.freeMemory(uniform_memory, null);
+
+    const set_layouts = try _createSetLayouts(device);
+    errdefer for (set_layouts) |l| device.destroyDescriptorSetLayout(l, null);
+    const sets = try _createSets(device, set_pool, set_layouts);
+    _updateUniformDesriptor(device, uniform_buffers, sets);
+
+    const pipeline_layouts = try _createPipelineLayouts(device, set_layouts);
+    errdefer for (pipeline_layouts) |l| device.destroyPipelineLayout(l, null);
 
     return .{
         .window = window,
@@ -95,9 +152,25 @@ pub fn init() !VulkanContext {
         .queue = queue,
         .swapchain_info = swapchain_info,
         .command_pool = command_pool,
+        .set_pool = set_pool,
+
+        .frame_timestamp = std.time.nanoTimestamp(),
+        .frame_fences = frame_fences,
+        .acquiring_semaphore = acquiring_semephore,
+        .computing_semaphores = computing_semaphores,
+        .computing_commands = computing_commands,
+        .rendering_semaphores = rendering_semaphores,
+        .rendering_commands = rendering_commands,
+
+        .uniform_size = uniform_size,
         .uniform_memory = uniform_memory,
         .uniform_buffers = uniform_buffers,
-        .uniform_offsets_and_sizes = uniform_offsets_and_sizes,
+        .uniform_offsets = uniform_offsets,
+
+        .set_layouts = set_layouts,
+        .sets = sets,
+
+        .pipeline_layouts = pipeline_layouts,
     };
 }
 
@@ -107,94 +180,34 @@ pub fn deinit(self: *VulkanContext) void {
     defer self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
     defer self.instance.destroySurfaceKHR(self.surface, null);
     defer self.device.destroyDevice(null);
+    defer self.device.destroyCommandPool(self.command_pool, null);
+    defer self.device.destroyDescriptorPool(self.set_pool, null);
+
     defer self.device.destroySwapchainKHR(self.swapchain, null);
+    defer self.swapchain_images.deinit(helper.allocator);
     defer self.swapchain_views.deinit(helper.allocator);
     defer for (self.swapchain_views.items) |v| self.device.destroyImageView(v, null);
-    defer self.device.destroyCommandPool(self.command_pool, null);
-    defer for (self.uniform_buffers) |b| self.device.destroyBuffer(b, null);
-    defer self.device.freeMemory(self.uniform_memory, null);
+    defer self.swapchain_semaphores.deinit(helper.allocator);
+    defer for (self.swapchain_semaphores.items) |s| self.device.destroySemaphore(s, null);
 
-    defer self.device.destroyBuffer(self.ray_map, null);
+    defer for (self.frame_fences) |f| self.device.destroyFence(f, null);
+    defer self.device.destroySemaphore(self.acquiring_semaphore, null);
+    defer for (self.computing_semaphores) |s| self.device.destroySemaphore(s, null);
+    defer for (self.rendering_semaphores) |s| self.device.destroySemaphore(s, null);
+
+    defer self.device.freeMemory(self.uniform_memory, null);
+    defer for (self.uniform_buffers) |b1| for (b1) |b| self.device.destroyBuffer(b, null);
+
     defer self.device.freeMemory(self.storage_memory, null);
+    defer for (self.storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
+    defer for (self.storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
 
     defer for (self.set_layouts) |l| self.device.destroyDescriptorSetLayout(l, null);
+
     defer for (self.pipeline_layouts) |l| self.device.destroyPipelineLayout(l, null);
     defer for (self.pipelines) |p| self.device.destroyPipeline(p, null);
-}
 
-pub const MemoryTypeFinder = struct {
-    count: u6,
-    memory_type_flags: [32]vk.MemoryPropertyFlags,
-
-    pub fn init(instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice) MemoryTypeFinder {
-        const props = instance.getPhysicalDeviceMemoryProperties(physical_device);
-
-        var self: MemoryTypeFinder = undefined;
-        self.count = @intCast(props.memory_type_count);
-        for (0 .. 32) |idx| self.memory_type_flags[idx] = props.memory_types[idx].property_flags;
-        return self;
-    }
-
-    pub fn find(self: MemoryTypeFinder, mask: u32, props: vk.MemoryPropertyFlags) ?u5 {
-        var idx: u6 = 0;
-        var bit: u32 = 1;
-        while (idx < self.count) : ({ idx += 1; bit <<= 1; }) {
-            if (mask & bit != 0 and self.memory_type_flags[idx].contains(props)) {
-                return @intCast(idx);
-            }
-        } else return null;
-    }
-};
-
-fn _createUniformBuffers(device: vk.DeviceProxy) ![Stage.all.len]vk.Buffer {
-    var buffers: [Stage.all.len]vk.Buffer = [1]vk.Buffer { .null_handle } ** Stage.all.len;
-    var inited: usize = 0;
-    errdefer for (buffers[0 .. inited]) |b| if (b != .null_handle) device.destroyBuffer(b, null);
-
-    inline for (Stage.all) |stage| {
-        buffers[@intFromEnum(stage)] = try device.createBuffer(&.{
-            .sharing_mode = .exclusive,
-            .size = @sizeOf(stage.getComptimeNamed(shader_layout.uniforms)),
-            .usage = .{ .uniform_buffer_bit = true },
-        }, null);
-        inited += 1;
-    }
-    return buffers;
-}
-fn _allocAndBindUniformMemory(device: vk.DeviceProxy, finder: MemoryTypeFinder, buffers: [Stage.all.len]vk.Buffer) !struct {vk.DeviceMemory, [Stage.all.len][2]u64} {
-    var offsets_and_sizes: [buffers.len][2]u64 = undefined;
-    inline for (Stage.all) |stage| {
-        offsets_and_sizes[@intFromEnum(stage)][1] = @sizeOf(stage.getComptimeNamed(shader_layout.uniforms));
-    }
-
-    var total_size: u64 = 0;
-    var mem_type_mask: u32 = std.math.maxInt(u32);
-    for (buffers, 0..) |b, idx| {
-        const mem_req = device.getBufferMemoryRequirements(b);
-
-        total_size += _aligAppendSize(total_size, mem_req.alignment);
-        offsets_and_sizes[idx][0] = total_size;
-
-        total_size += mem_req.size;
-        mem_type_mask &= mem_req.memory_type_bits;
-    }
-
-    const mem_type = finder.find(mem_type_mask, .{
-        .host_visible_bit = true,
-        .host_coherent_bit = true,
-    }) orelse return error.FailedToFindSuitableMemoryType;
-
-    const memory = try device.allocateMemory(&.{
-        .memory_type_index = mem_type,
-        .allocation_size = total_size,
-    }, null);
-    errdefer device.freeMemory(memory, null);
-
-    for (buffers, offsets_and_sizes) |b, os| {
-        try device.bindBufferMemory(b, memory, os[0]);
-    }
-
-    return .{memory, offsets_and_sizes};
+    self.device.deviceWaitIdle() catch |err| log.err("failed to wait device idle: {t}", .{err});
 }
 
 fn _aligAppendSize(size: u64, alignment: u64) u64 {
@@ -331,7 +344,6 @@ fn _createDebugMessenger(instance: vk.InstanceProxy) !vk.DebugUtilsMessengerEXT 
     } else return .null_handle;
 }
 
-
 fn _createSurface(instance: vk.InstanceProxy, window: *glfw.Window) !vk.SurfaceKHR {
     var handle: vk.SurfaceKHR = .null_handle;
     const result: vk.Result = @enumFromInt(@intFromEnum(glfw.glfwCreateWindowSurface(
@@ -349,7 +361,6 @@ fn _createSurface(instance: vk.InstanceProxy, window: *glfw.Window) !vk.SurfaceK
     }
     return handle;
 }
-
 
 pub fn PhysicalDeviceFeatures(comptime ExtraFeatures: []const type) type {
     return struct {
@@ -503,11 +514,9 @@ fn _createDevice(instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice,
     return .init(handle, &device_wrapper);
 }
 
-fn _getQueue(device: vk.DeviceProxy, queue_family: u32) vk.QueueProxy {
-    const handle = device.getDeviceQueue(queue_family, 0);
-    return .init(handle, device.wrapper);
+fn _getQueue(device: vk.DeviceProxy, queue_family: u32) vk.Queue {
+    return device.getDeviceQueue(queue_family, 0);
 }
-
 
 fn _getSwapchainInfo(allocator: std.mem.Allocator, instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice, window: *glfw.Window, surface: vk.SurfaceKHR) !vk.SwapchainCreateInfoKHR {
     var capas = try instance.getPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface);
@@ -522,9 +531,14 @@ fn _getSwapchainInfo(allocator: std.mem.Allocator, instance: vk.InstanceProxy, p
 
     const surface_formats = try instance.getPhysicalDeviceSurfaceFormatsAllocKHR(physical_device, surface, allocator);
     defer allocator.free(surface_formats);
-    const surface_format = for (surface_formats) |f| {
-        if (std.meta.eql(f, .{ .format = .b8g8r8a8_unorm, .color_space = .srgb_nonlinear_khr })) break f;
-    } else surface_formats[0];
+    var choose_idx: ?usize = null;
+    for (surface_formats, 0..) |format, idx| {
+        if (format.format == .b8g8r8a8_unorm) {
+            choose_idx = idx;
+            if (format.color_space == .srgb_nonlinear_khr) break;
+        }
+    }
+    const surface_format = surface_formats[choose_idx orelse return error.NoSuitableSurfaceFormat];
 
     const present_modes = try instance.getPhysicalDeviceSurfacePresentModesAllocKHR(physical_device, surface, allocator);
     defer allocator.free(present_modes);
@@ -546,23 +560,238 @@ fn _getSwapchainInfo(allocator: std.mem.Allocator, instance: vk.InstanceProxy, p
     };
 }
 
-
 fn _createCommandPool(device: vk.DeviceProxy, queue_family: u32) !vk.CommandPool {
     return device.createCommandPool(&.{
+        .flags = .{ .reset_command_buffer_bit = true },
         .queue_family_index = queue_family,
     }, null);
 }
 
-fn _createCommandBuffer(device: vk.DeviceProxy, command_pool: vk.CommandPool) !vk.CommandBufferProxy {
-    var handles: [1]vk.CommandBuffer = undefined;
+fn _createCommands(device: vk.DeviceProxy, pool: vk.CommandPool) ![in_flight_count]vk.CommandBuffer {
+    var commands = std.mem.zeroes([in_flight_count]vk.CommandBuffer);
+    errdefer device.freeCommandBuffers(pool, commands.len, &commands);
     try device.allocateCommandBuffers(&.{
         .level = .primary,
-        .command_pool = command_pool,
-        .command_buffer_count = 1,
-    }, &handles);
-    return .init(handles[0], device.wrapper);
+        .command_pool = pool,
+        .command_buffer_count = commands.len,
+    }, &commands);
+    return commands;
 }
 
+fn _createDescriptorPool(device: vk.DeviceProxy) !vk.DescriptorPool {
+    const pool_sizes = [_]vk.DescriptorPoolSize {
+        .{
+            .type = .uniform_buffer,
+            .descriptor_count = in_flight_count * Stage.all.len,
+        },
+        .{
+            .type = .storage_image,
+            .descriptor_count = in_flight_count * set_layout.storage_count + in_flight_count * 1,
+        },
+    };
+    return device.createDescriptorPool(&.{
+        .flags = .{ .free_descriptor_set_bit = true },
+        .max_sets = in_flight_count * (set_layout.layout_count - 1 + Stage.all.len),
+        .pool_size_count = pool_sizes.len,
+        .p_pool_sizes = &pool_sizes,
+    }, null);
+}
+
+fn _createSetLayouts(device: vk.DeviceProxy) !SetLayouts {
+    var layouts = std.mem.zeroes(SetLayouts);
+    errdefer for (layouts) |l| device.destroyDescriptorSetLayout(l, null);
+
+    layouts[0] = try device.createDescriptorSetLayout(&shader_layout.set_layout.uniform, null);
+    layouts[1] = try device.createDescriptorSetLayout(&shader_layout.set_layout.storage, null);
+    layouts[2] = try device.createDescriptorSetLayout(&shader_layout.set_layout.surface, null);
+    return layouts;
+}
+fn _createSets(device: vk.DeviceProxy, pool: vk.DescriptorPool, layouts: SetLayouts) !Sets {
+    const set_count = in_flight_count * (set_layout.layout_count - 1 + Stage.all.len);
+
+    var set_layouts: [in_flight_count][set_layout.layout_count - 1 + Stage.all.len]vk.DescriptorSetLayout = undefined;
+    @memset(set_layouts[0][0 .. Stage.all.len], layouts[0]); @memcpy(set_layouts[0][Stage.all.len ..], layouts[1 ..]);
+    @memset(set_layouts[1][0 .. Stage.all.len], layouts[0]); @memcpy(set_layouts[1][Stage.all.len ..], layouts[1 ..]);
+
+    var sets = std.mem.zeroes(Sets);
+    errdefer device.freeDescriptorSets(pool, set_count, @ptrCast(&sets)) catch {};
+    try device.allocateDescriptorSets(&.{
+        .descriptor_pool = pool,
+        .descriptor_set_count = set_count,
+        .p_set_layouts = @ptrCast(&set_layouts),
+    }, @ptrCast(&sets));
+    return sets;
+}
+
+fn _updateUniformDesriptor(device: vk.DeviceProxy, buffers: UniformBuffers, sets: Sets) void {
+    var infos: [in_flight_count][Stage.all.len]vk.DescriptorBufferInfo = undefined;
+    for (0 .. in_flight_count) |f| for (0 .. Stage.all.len) |s| {
+        infos[f][s] = .{
+            .buffer = buffers[f][s],
+            .offset = 0,
+            .range = vk.WHOLE_SIZE,
+        };
+    };
+
+    var writes: [in_flight_count][Stage.all.len]vk.WriteDescriptorSet = undefined;
+    for (0 .. in_flight_count) |f| for (0 .. Stage.all.len) |s| {
+        writes[f][s] = .{
+            .descriptor_type = .uniform_buffer,
+            .descriptor_count = 1,
+            .p_buffer_info = infos[f][s .. s+1].ptr,
+            .dst_set = sets[f][s],
+            .dst_binding = 0,
+            .dst_array_element = 0,
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
+        };
+    };
+
+    device.updateDescriptorSets(in_flight_count * Stage.all.len, @ptrCast(&writes), 0, null);
+}
+fn _updateStorageDescriptor(device: vk.DeviceProxy, views: StorageViews, sets: Sets) void {
+    var infos: [in_flight_count][set_layout.storage_count]vk.DescriptorImageInfo = undefined;
+    for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |im| {
+        infos[f][im] = .{
+            .sampler = .null_handle,
+            .image_view = views[f][im],
+            .image_layout = .general,
+        };
+    };
+
+    var writes: [in_flight_count][set_layout.storage_count]vk.WriteDescriptorSet = undefined;
+    for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |im| {
+        writes[f][im] = .{
+            .descriptor_type = .storage_image,
+            .descriptor_count = 1,
+            .p_image_info = infos[f][im .. im+1].ptr,
+            .dst_set = sets[f][Stage.all.len],
+            .dst_binding = @intCast(im),
+            .dst_array_element = 0,
+            .p_buffer_info = undefined,
+            .p_texel_buffer_view = undefined,
+        };
+    };
+
+    device.updateDescriptorSets(in_flight_count * set_layout.storage_count, @ptrCast(&writes), 0, null);
+}
+fn _updateSurfaceDescriptor(device: vk.DeviceProxy, view: vk.ImageView, set: vk.DescriptorSet) void {
+    device.updateDescriptorSets(1, &.{ vk.WriteDescriptorSet {
+        .descriptor_type = .storage_image,
+        .descriptor_count = 1,
+        .p_image_info = &.{ vk.DescriptorImageInfo {
+            .sampler = .null_handle,
+            .image_view = view,
+            .image_layout = .general,
+        } },
+        .dst_set = set,
+        .dst_binding = 0,
+        .dst_array_element = 0,
+        .p_buffer_info = undefined,
+        .p_texel_buffer_view = undefined,
+    } }, 0, null);
+}
+
+fn _createPipelineLayouts(device: vk.DeviceProxy, set_layouts: SetLayouts) !PipelineLayouts {
+    var layouts = std.mem.zeroes([Stage.all.len]vk.PipelineLayout);
+    errdefer for (layouts) |l| device.destroyPipelineLayout(l, null);
+
+    var ps_layouts: SetLayouts = undefined;
+    for (Stage.all) |stage| {
+        const set_layout_indices = stage.getNamedStatic(shader_layout.pipeline_set_layout_indices);
+        for (set_layout_indices, 0..) |layout_idx, idx| ps_layouts[idx] = set_layouts[layout_idx];
+
+        layouts[@intFromEnum(stage)] = try device.createPipelineLayout(&.{
+            .set_layout_count = @intCast(set_layout_indices.len),
+            .p_set_layouts = &ps_layouts,
+        }, null);
+    }
+    return layouts;
+}
+
+pub const MemoryTypeFinder = struct {
+    count: u6,
+    memory_type_flags: [32]vk.MemoryPropertyFlags,
+
+    pub fn init(instance: vk.InstanceProxy, physical_device: vk.PhysicalDevice) MemoryTypeFinder {
+        const props = instance.getPhysicalDeviceMemoryProperties(physical_device);
+
+        var self: MemoryTypeFinder = undefined;
+        self.count = @intCast(props.memory_type_count);
+        for (0 .. 32) |idx| self.memory_type_flags[idx] = props.memory_types[idx].property_flags;
+        return self;
+    }
+
+    pub fn find(self: MemoryTypeFinder, mask: u32, props: vk.MemoryPropertyFlags) !u5 {
+        var idx: u6 = 0;
+        var bit: u32 = 1;
+        while (idx < self.count) : ({ idx += 1; bit <<= 1; }) {
+            if (mask & bit != 0 and self.memory_type_flags[idx].contains(props)) {
+                return @intCast(idx);
+            }
+        } else return error.NoSuitableMemoryType;
+    }
+};
+
+fn _createUniformBuffers(device: vk.DeviceProxy) !UniformBuffers {
+    var buffers = std.mem.zeroes(UniformBuffers);
+    errdefer for (buffers) |b1| for (b1) |b| device.destroyBuffer(b, null);
+
+    for (0 .. in_flight_count) |f| for (Stage.all) |stage| {
+        buffers[f][@intFromEnum(stage)] = try device.createBuffer(&.{
+            .sharing_mode = .exclusive,
+            .size = uniform_sizes[@intFromEnum(stage)],
+            .usage = .{ .uniform_buffer_bit = true },
+        }, null);
+    };
+    return buffers;
+}
+fn _calcuteUniformMemoryInfo(device: vk.DeviceProxy, buffers: UniformBuffers) struct {UniformOffsets, u64, u32} {
+    var offsets: UniformOffsets = undefined;
+    var size: u64 = 0;
+    var mask: u32 = std.math.maxInt(u32);
+
+    for (0 .. in_flight_count) |f| for (0 .. Stage.all.len) |s| {
+        const mem_req = device.getBufferMemoryRequirements(buffers[f][s]);
+
+        size += _aligAppendSize(size, mem_req.alignment);
+        offsets[f][s] = size;
+
+        size += mem_req.size;
+        mask &= mem_req.memory_type_bits;
+    };
+    return .{offsets, size, mask};
+}
+fn _allocAndBindUniformMemory(device: vk.DeviceProxy, memory_type: u5, buffers: UniformBuffers, offsets: UniformOffsets, size: u64) !vk.DeviceMemory {
+    const memory = try device.allocateMemory(&.{
+        .memory_type_index = memory_type,
+        .allocation_size = size,
+    }, null);
+    errdefer device.freeMemory(memory, null);
+
+    for (buffers, offsets) |b1, o1| for (b1, o1) |b, o| {
+        try device.bindBufferMemory(b, memory, o);
+    };
+
+    return memory;
+}
+
+fn _createSemaphores(device: vk.DeviceProxy) !Semaphores {
+    var semaphores = std.mem.zeroes(Semaphores);
+    errdefer for (semaphores) |s| device.destroySemaphore(s, null);
+
+    for (&semaphores) |*s| s.* = try device.createSemaphore(&.{}, null);
+    return semaphores;
+}
+fn _createFences(device: vk.DeviceProxy) !Fences {
+    var fences = std.mem.zeroes(Fences);
+    errdefer for (fences) |f| device.destroyFence(f, null);
+
+    for (&fences) |*f| f.* = try device.createFence(&.{
+        .flags = .{ .signaled_bit = true },
+    }, null);
+    return fences;
+}
 
 fn _createImageView(device: vk.DeviceProxy, image: vk.Image, format: vk.Format) !vk.ImageView {
     return device.createImageView(&.{
@@ -585,8 +814,31 @@ fn _createImageView(device: vk.DeviceProxy, image: vk.Image, format: vk.Format) 
     }, null);
 }
 
+fn _growthSemaphores(allocator: std.mem.Allocator, device: vk.DeviceProxy, semaphores: *std.ArrayList(vk.Semaphore), len: usize) !void {
+    std.debug.assert(semaphores.items.len <= len);
+    try semaphores.ensureTotalCapacity(allocator, len);
+    for (0 .. len - semaphores.items.len) |_|{
+        semaphores.appendAssumeCapacity(
+            try device.createSemaphore(&.{}, null)
+        );
+    }
+}
+fn _shrinkSemaphores(device: vk.DeviceProxy, semaphores: *std.ArrayList(vk.Semaphore), len: usize) void {
+    std.debug.assert(semaphores.items.len >= len);
+    for (0 .. semaphores.items.len - len) |_| {
+        device.destroySemaphore(semaphores.pop().?, null);
+    }
+}
 
-pub fn recreateSwapchainStuff(self: *VulkanContext) !void {
+fn _3dExtent(extent2d: vk.Extent2D) vk.Extent3D {
+    return .{ .width = extent2d.width, .height = extent2d.height, .depth = 1 };
+}
+
+
+pub fn shouldRecreateSwapchain(self: VulkanContext) bool {
+    return self.swapchain_outdate;
+}
+pub fn recreateSwapchain(self: *VulkanContext) !void {
     // create new swapchain
     self.swapchain_info.old_swapchain = self.swapchain;
     const swapchain = try self.device.createSwapchainKHR(&self.swapchain_info, null);
@@ -595,27 +847,103 @@ pub fn recreateSwapchainStuff(self: *VulkanContext) !void {
     // get swapchain images
     const images = try self.device.getSwapchainImagesAllocKHR(swapchain, helper.allocator);
     defer helper.allocator.free(images);
+    try self.swapchain_images.ensureTotalCapacity(helper.allocator, images.len);
     try self.swapchain_views.ensureTotalCapacity(helper.allocator, images.len);
     // create new swapchain image views
     var views: std.ArrayList(vk.ImageView) = try .initCapacity(helper.allocator, images.len);
     defer views.deinit(helper.allocator);
-    errdefer for (views) |v| self.device.destroyImageView(v, null);
+    errdefer for (views.items) |v| self.device.destroyImageView(v, null);
     for (images) |i| views.appendAssumeCapacity(try _createImageView(self.device, i, self.swapchain_info.image_format));
 
-    const pixel_count = @as(u64, self.swapchain_info.image_extent.width) * self.swapchain_info.image_extent.height;
-    if (pixel_count > self.pixel_count) {
+    // growth swapchain semaphores
+    const old_len = self.swapchain_semaphores.items.len;
+    errdefer if (self.swapchain_semaphores.items.len > old_len) _shrinkSemaphores(self.device, &self.swapchain_semaphores, old_len);
+    if (self.swapchain_semaphores.items.len < images.len) try _growthSemaphores(helper.allocator, self.device, &self.swapchain_semaphores, images.len);
 
+    if (!std.meta.eql(self.swapchain_info.image_extent, self.storage_extent)) {
+        // create new storage images and views
+        var storage_images = std.mem.zeroes([in_flight_count][set_layout.storage_count]vk.Image);
+        var offsets: [in_flight_count][set_layout.storage_count]u64 = undefined;
+        errdefer for (storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
+
+        var mem_type_mask: u32 = std.math.maxInt(u32);
+        var total_size: u64 = 0;
+        for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |i| {
+            storage_images[f][i] = try self.device.createImage(&.{
+                .image_type = .@"2d",
+                .format = .r32g32b32a32_sfloat,
+                .extent = _3dExtent(self.swapchain_info.image_extent),
+                .mip_levels = 1,
+                .array_layers = 1,
+                .samples = @bitCast(@as(vk.Flags, 1)),
+                .tiling = .optimal,
+                .usage = .{ .storage_bit = true },
+                .sharing_mode = .exclusive,
+                .initial_layout = .undefined,
+            }, null);
+
+            const mem_req = self.device.getImageMemoryRequirements(storage_images[f][i]);
+            total_size += _aligAppendSize(total_size, mem_req.alignment);
+            offsets[f][i] = total_size;
+            total_size += mem_req.size;
+            mem_type_mask &= mem_req.memory_type_bits;
+        };
+
+        var storage_views = std.mem.zeroes([in_flight_count][set_layout.storage_count]vk.ImageView);
+        errdefer for (storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
+
+        const realloc_memory = total_size > self.storage_size or mem_type_mask & (@as(u32, 1) << self.storage_memory_type) == 0;
+        const storage_memory, const memory_type = if (realloc_memory) blk: {
+            // alloc new storage memory
+            const mem_type = try self.memory_type_fiinder.find(mem_type_mask, .{ .device_local_bit = true });
+
+            const memory = try self.device.allocateMemory(&.{
+                .memory_type_index = mem_type,
+                .allocation_size = total_size,
+            }, null);
+            break :blk .{memory, mem_type};
+        } else .{self.storage_memory, self.storage_memory_type};
+        errdefer if (realloc_memory) self.device.freeMemory(storage_memory, null);
+
+        // bind image memory and create new image views
+        for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |i| {
+            try self.device.bindImageMemory(storage_images[f][i], storage_memory, offsets[f][i]);
+            storage_views[f][i] = try _createImageView(self.device, storage_images[f][i], .r32g32b32a32_sfloat);
+        };
+
+        if (realloc_memory) {
+            // free old memory
+            self.device.freeMemory(self.storage_memory, null);
+
+            // store new memory
+            self.storage_memory = storage_memory;
+            self.storage_size = total_size;
+            self.storage_memory_type = memory_type;
+        }
+
+        // store new storage images and views
+        self.storage_extent = self.swapchain_info.image_extent;
+        self.storage_images = storage_images;
+        self.storage_views = storage_views;
+
+        // update descriptor
+        _updateStorageDescriptor(self.device, self.storage_views, self.sets);
     }
 
+    // destroy extra swapchain semaphores
+    if (self.swapchain_semaphores.items.len > images.len) _shrinkSemaphores(self.device, &self.swapchain_semaphores, images.len);
     // destroy old swapchain image views
     for (self.swapchain_views.items) |v| self.device.destroyImageView(v, null);
     self.swapchain_views.clearRetainingCapacity();
+    self.swapchain_images.clearRetainingCapacity();
     // destroy old swapchain
     self.device.destroySwapchainKHR(self.swapchain, null);
 
-    // store
+    // store new swapchain and views
+    self.swapchain_images.appendSliceAssumeCapacity(images);
     self.swapchain_views.appendSliceAssumeCapacity(views.items);
     self.swapchain = swapchain;
+    self.swapchain_outdate = false;
 }
 
 pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !void {
@@ -625,16 +953,6 @@ pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !voi
     }, null);
     defer self.device.destroyShaderModule(module, null);
 
-    const set_layout_info = &stage.getNamedStatic(shader_layout.set_layout_infos);
-    const set_layout = try self.device.createDescriptorSetLayout(set_layout_info, null);
-    errdefer self.device.destroyDescriptorSetLayout(set_layout, null);
-
-    const pipeline_layout = try self.device.createPipelineLayout(&.{
-        .set_layout_count = 1,
-        .p_set_layouts = &.{set_layout}
-    }, null);
-    errdefer self.device.destroyPipelineLayout(pipeline_layout, null);
-
     var pipeline: vk.Pipeline = .null_handle;
     _ = try self.device.createComputePipelines(.null_handle, 1, &.{ vk.ComputePipelineCreateInfo {
         .stage = .{
@@ -642,11 +960,252 @@ pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !voi
             .module = module,
             .p_name = "main",
         },
-        .layout = pipeline_layout,
+        .layout = self.pipeline_layouts[@intFromEnum(stage)],
         .base_pipeline_index = 0,
     } }, null, @ptrCast(&pipeline));
 
-    self.set_layouts[@intFromEnum(stage)] = set_layout;
-    self.pipeline_layouts[@intFromEnum(stage)] = pipeline_layout;
     self.pipelines[@intFromEnum(stage)] = pipeline;
+}
+
+
+pub fn shouldExit(self: VulkanContext) bool {
+    return self.window.shouldClose();
+}
+
+
+pub const FrameResouces = struct {
+    swapchain: vk.SwapchainKHR,
+    extent: vk.Extent2D,
+    swapchain_index: u32,
+    swapchain_image: vk.Image,
+    swapchain_view: vk.ImageView,
+    is_suboptimal: bool,
+    swapchain_outdate: *bool,
+    prev_frame_time: i128,
+
+    device: vk.DeviceProxy,
+    queue: vk.Queue,
+    fence: vk.Fence,
+    acquiring_semaphore: vk.Semaphore,
+    computing_command: vk.CommandBuffer,
+    computing_semaphore: vk.Semaphore,
+    rendering_command: vk.CommandBuffer,
+    rendering_semaphore: vk.Semaphore,
+
+    uniform_mapping: ?*anyopaque = null,
+    uniform_range: [2]u64,
+    uniform_memory: vk.DeviceMemory,
+    uniforms: [Stage.all.len]vk.Buffer,
+    uniform_offsets: [Stage.all.len]u64,
+
+    sets: [set_layout.layout_count - 1 + Stage.all.len]vk.DescriptorSet,
+    pipeline_layouts: PipelineLayouts,
+    pipelines: Pipelines,
+
+    pub fn beginSettingUniforms(self: *FrameResouces) !void {
+        std.debug.assert(self.uniform_mapping == null);
+        self.uniform_mapping = try self.device.mapMemory(self.uniform_memory, self.uniform_range[0], self.uniform_range[1] - self.uniform_range[0], .{});
+    }
+
+    pub fn setUniform(self: *FrameResouces, comptime stage: Stage, value: stage.getComptimeNamed(shader_layout.uniforms)) void {
+        const offset = self.uniform_offsets[@intFromEnum(stage)];
+        const data = &@as([*]u8, @ptrCast(self.uniform_mapping.?))[offset];
+        const uniform: *stage.getComptimeNamed(shader_layout.uniforms) = @ptrCast(@alignCast(data));
+        uniform.* = value;
+    }
+
+    pub fn endSettingUniforms(self: *FrameResouces) void {
+        std.debug.assert(self.uniform_mapping != null);
+        self.device.unmapMemory(self.uniform_memory);
+        self.uniform_mapping = null;
+    }
+
+    pub const DrawFrameInfo = struct {};
+
+    pub fn drawFrame(self: FrameResouces, info: DrawFrameInfo) !void {
+        _updateSurfaceDescriptor(self.device, self.swapchain_view, self.sets[self.sets.len - 1]);
+
+        const queue: vk.QueueProxy = .{ .handle = self.queue, .wrapper = self.device.wrapper };
+        const group_x = std.math.divCeil(u32, self.extent.width, 16) catch unreachable;
+        const group_y = std.math.divCeil(u32, self.extent.height, 16) catch unreachable;
+
+        const computing_command: vk.CommandBufferProxy = .{ .handle = self.computing_command, .wrapper = self.device.wrapper };
+
+        const rendering_command: vk.CommandBufferProxy = .{ .handle = self.rendering_command, .wrapper = self.device.wrapper };
+        const rendering_wait_semaphores = [_]vk.Semaphore {self.acquiring_semaphore};
+        const rendering_wait_stages: [rendering_wait_semaphores.len]vk.PipelineStageFlags = .{.{ .compute_shader_bit = true }};
+
+        const presenting_wait_semaphores = [_]vk.Semaphore {self.rendering_semaphore};
+
+        _ = .{info, computing_command};
+
+        { // render ray
+            const stage = Stage.render_ray;
+            const command = rendering_command;
+            const uniform_set = self.sets[@intFromEnum(stage)];
+            const storage_set = self.sets[Stage.all.len];
+            const surface_set = self.sets[Stage.all.len + 1];
+            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
+            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
+            const pipeline = self.pipelines[@intFromEnum(stage)];
+
+            try command.resetCommandBuffer(.{});
+            try command.beginCommandBuffer(&.{});
+
+            command.pipelineBarrier2(&.{
+                .image_memory_barrier_count = 1,
+                .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
+                    .image = self.swapchain_image,
+                    .subresource_range = .{
+                        .aspect_mask = .{ .color_bit = true },
+                        .base_mip_level = 0,
+                        .level_count = 1,
+                        .base_array_layer = 0,
+                        .layer_count = 1,
+                    },
+
+                    .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                    .src_stage_mask = .{ .top_of_pipe_bit = true },
+                    .src_access_mask = .{},
+                    .old_layout = .undefined,
+
+                    .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                    .dst_stage_mask = .{ .compute_shader_bit = true },
+                    .dst_access_mask = .{ .shader_write_bit = true },
+                    .new_layout = .general,
+                } },
+            });
+
+            command.bindPipeline(.compute, pipeline);
+            command.bindDescriptorSets(
+                .compute, pipeline_layout,
+                0, set_count, &.{uniform_set, storage_set, surface_set},
+                0, null,
+            );
+            command.dispatch(group_x, group_y, 1);
+
+            command.pipelineBarrier2(&.{
+                .image_memory_barrier_count = 1,
+                .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
+                    .image = self.swapchain_image,
+                    .subresource_range = .{
+                        .aspect_mask = .{ .color_bit = true },
+                        .base_mip_level = 0,
+                        .level_count = 1,
+                        .base_array_layer = 0,
+                        .layer_count = 1,
+                    },
+
+                    .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                    .src_stage_mask = .{ .compute_shader_bit = true },
+                    .src_access_mask = .{ .shader_write_bit = true },
+                    .old_layout = .general,
+
+                    .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                    .dst_stage_mask = .{ .bottom_of_pipe_bit = true },
+                    .dst_access_mask = .{},
+                    .new_layout = .present_src_khr,
+                } },
+            });
+
+            try command.endCommandBuffer();
+        }
+
+        try queue.submit(1, &.{ vk.SubmitInfo {
+            .command_buffer_count = 1,
+            .p_command_buffers = &.{rendering_command.handle},
+            .wait_semaphore_count = rendering_wait_semaphores.len,
+            .p_wait_semaphores = &rendering_wait_semaphores,
+            .p_wait_dst_stage_mask = &rendering_wait_stages,
+            .signal_semaphore_count = presenting_wait_semaphores.len,
+            .p_signal_semaphores = &presenting_wait_semaphores,
+        } }, self.fence);
+        const present_result = queue.presentKHR(&.{
+            .swapchain_count = 1,
+            .p_swapchains = &.{self.swapchain},
+            .p_image_indices = &.{self.swapchain_index},
+            .wait_semaphore_count = presenting_wait_semaphores.len,
+            .p_wait_semaphores = &presenting_wait_semaphores,
+        });
+
+        if (present_result) |result| switch (result) {
+            .success => {},
+            .suboptimal_khr => self.swapchain_outdate.* = true,
+            else => unreachable,
+        } else |err| switch (err) {
+            error.OutOfDateKHR => self.swapchain_outdate.* = true,
+            else => return err,
+        }
+    }
+};
+
+pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
+    const fence = self.frame_fences[self.next_frame];
+
+    var wait_count: usize = 0;
+    const wait_time = std.time.ns_per_s;
+    while (try self.device.waitForFences(1, &.{fence}, .true, wait_time) == .timeout) {
+        wait_count += 1;
+        log.warn("waiting for frame fence over {d}s", .{wait_count});
+    }
+
+    const result = self.device.acquireNextImageKHR(
+        self.swapchain,
+        std.math.maxInt(u64),
+        self.acquiring_semaphore,
+        .null_handle,
+    ) catch |err| switch (err) {
+        error.OutOfDateKHR => {
+            self.swapchain_outdate = true;
+            return null;
+        },
+        else => return err,
+    };
+    if (result.result == .not_ready) return null;
+
+    try self.device.resetFences(1, &.{fence});
+
+    const uniform_start = self.uniform_offsets[self.next_frame][0];
+    const resources: FrameResouces = .{
+        .swapchain = self.swapchain,
+        .extent = self.storage_extent,
+        .swapchain_index = result.image_index,
+        .swapchain_image = self.swapchain_images.items[result.image_index],
+        .swapchain_view = self.swapchain_views.items[result.image_index],
+        .is_suboptimal = result.result == .suboptimal_khr,
+        .swapchain_outdate = &self.swapchain_outdate,
+        .prev_frame_time = blk: {
+            const curr_time = std.time.nanoTimestamp();
+            const dt = curr_time - self.frame_timestamp;
+            self.frame_timestamp = curr_time;
+            break :blk dt;
+        },
+
+        .device = self.device,
+        .queue = self.queue,
+        .fence = fence,
+        .acquiring_semaphore = self.acquiring_semaphore,
+        .computing_command = self.computing_commands[self.next_frame],
+        .computing_semaphore = self.computing_semaphores[self.next_frame],
+        .rendering_command = self.rendering_commands[self.next_frame],
+        .rendering_semaphore = self.rendering_semaphores[self.next_frame],
+
+        .uniform_range = .{ uniform_start, if (self.next_frame == 0) self.uniform_offsets[1][0] else self.uniform_size },
+        .uniform_memory = self.uniform_memory,
+        .uniforms = self.uniform_buffers[self.next_frame],
+        .uniform_offsets = blk: {
+            var offsets = self.uniform_offsets[self.next_frame];
+            for (&offsets) |*o| o.* -= uniform_start;
+            break :blk offsets;
+        },
+
+        .sets = self.sets[self.next_frame],
+        .pipeline_layouts = self.pipeline_layouts,
+        .pipelines = self.pipelines,
+    };
+
+    std.mem.swap(vk.Semaphore, &self.acquiring_semaphore, &self.swapchain_semaphores.items[result.image_index]);
+    self.next_frame +%= 1;
+
+    return resources;
 }

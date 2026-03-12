@@ -28,6 +28,22 @@ pub fn main() !void {
     defer vk_ctx.deinit();
 
     try buildPipelines(&vk_ctx, args.slangc.value, args.shader_folder.value);
+
+    if (helper.is_debug) std.log.info("entering main loop...", .{});
+    defer if (helper.is_debug) std.log.info("main loop exited.", .{});
+    while (!vk_ctx.shouldExit()) {
+        glfw.pollEvents();
+
+        if (vk_ctx.shouldRecreateSwapchain()) {
+            if (helper.is_debug) std.log.info("recreating swapchain...", .{});
+            try vk_ctx.recreateSwapchain();
+            if (helper.is_debug) std.log.info("swapchain recreated.", .{});
+        }
+
+        if (try vk_ctx.acquireFrame()) |resources| {
+            try resources.drawFrame(.{});
+        }
+    }
 }
 
 const base_shaders = struct {

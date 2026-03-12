@@ -52,26 +52,52 @@ pub const uniforms = struct {
     };
 };
 
-pub const set_layout_infos = struct {
-    pub const init_ray = generate(&.{.uniform_buffer, .storage_buffer});
-    pub const render_ray = generate(&.{.uniform_buffer, .uniform_buffer, .storage_image});
+pub const set_layout = struct {
+    pub const layout_count = 3;
+    pub const storage_count = 4;
 
-    inline fn generate(comptime types: []const vk.DescriptorType) vk.DescriptorSetLayoutCreateInfo {
-        const bindings = blk: {
-            var b: [types.len]vk.DescriptorSetLayoutBinding = undefined;
-            for (types, 0..) |t, idx| {
-                b[idx] = .{
-                    .binding = idx,
-                    .descriptor_type = t,
-                    .descriptor_count = 1,
-                    .stage_flags = .{ .compute_bit = true },
-                };
-            }
-            break :blk b;
+    /// index: 0
+    pub const uniform: vk.DescriptorSetLayoutCreateInfo = .{
+        .binding_count = 1,
+        .p_bindings = &.{ .{
+            .binding = 0,
+            .descriptor_type = .uniform_buffer,
+            .descriptor_count = 1,
+            .stage_flags = .{ .compute_bit = true },
+        } },
+    };
+
+    /// index: 1
+    pub const storage: vk.DescriptorSetLayoutCreateInfo = blk: {
+        const bindings = blk1: {
+            var bs: [storage_count]vk.DescriptorSetLayoutBinding = undefined;
+            for (&bs, 0..) |*b, idx| b.* = .{
+                .binding = idx,
+                .descriptor_type = .storage_image,
+                .descriptor_count = 1,
+                .stage_flags = .{ .compute_bit = true },
+            };
+            break :blk1 bs;
         };
-        return .{
+        break :blk .{
             .binding_count = bindings.len,
             .p_bindings = &bindings,
         };
-    }
+    };
+
+    /// index: 2
+    pub const surface: vk.DescriptorSetLayoutCreateInfo = .{
+        .binding_count = 1,
+        .p_bindings = &.{ .{
+            .binding = 0,
+            .descriptor_type = .storage_image,
+            .descriptor_count = 1,
+            .stage_flags = .{ .compute_bit = true },
+        } },
+    };
+};
+
+pub const pipeline_set_layout_indices = struct {
+    pub const init_ray: []const usize = &.{0, 1};
+    pub const render_ray: []const usize = &.{0, 1, 2};
 };

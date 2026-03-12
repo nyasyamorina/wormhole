@@ -7,14 +7,25 @@ struct Uniform {
 [vk_binding(0, 0)]
 ConstantBuffer<Uniform> uniform;
 
-[vk_binding(1, 0)]
-RWStructuredBuffer<Partical> ray_map;
+[vk_binding(0, 1)] [format("rgba32f")]
+RWTexture2D<vector<float, 4>, 1> ray_position;
+
+[vk_binding(1, 1)] [format("rgba32f")]
+RWTexture2D<vector<float, 4>, 1> ray_direction;
+
+[vk_binding(2, 1)] [format("rgba32f")]
+RWTexture2D<vector<float, 4>, 1> _unused_3;
+
+[vk_binding(3, 1)] [format("rgba32f")]
+RWTexture2D<vector<float, 4>, 1> _unused_4;
 
 
 [shader("compute")] [numthreads(16, 16, 1)]
 void main(vector<uint32_t, 3> thread_id: SV_DispatchThreadID) {
-    if (thread_id.x >= uniform.extent.x || thread_id.y >= uniform.extent.y) return;
-    uint64_t idx = uint64_t(thread_id.y) * uint64_t(uniform.extent.y) + uint64_t(thread_id.x);
+    vector<uint, 2> extent;
+    ray_position.GetDimensions(extent.x, extent.y);
+    if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
-
+    ray_position.Store(thread_id.xy, {0.0});
+    ray_direction.Store(thread_id.xy, {0.0});
 }
