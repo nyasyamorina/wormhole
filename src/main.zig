@@ -6,6 +6,8 @@ const Arguments = @import("Arguments.zig");
 const helper = @import("helper.zig");
 const VulkanContext = @import("VulkanContext.zig");
 const shader_layout = @import("shader_layout.zig");
+const math = @import("math.zig");
+const Controller = @import("Controller.zig");
 
 
 pub const std_options: std.Options = .{
@@ -24,7 +26,16 @@ pub fn main() !void {
     if (!glfw.init()) return error.FaildToInitGlfw;
     defer glfw.terminate();
 
-    var vk_ctx: VulkanContext = try .init();
+    var controller: Controller = try .init();
+    defer controller.deinit();
+    controller.initCamera(.{
+        .position = .{0, 0, 0},
+        .direction = .{0.2, 1, 0.1},
+        .view_up = .{0, 0, 1},
+        .fov_v = 90,
+    });
+
+    var vk_ctx: VulkanContext = try .init(&controller);
     defer vk_ctx.deinit();
 
     try buildPipelines(&vk_ctx, args.slangc.value, args.shader_folder.value);
@@ -40,7 +51,20 @@ pub fn main() !void {
             if (helper.is_debug) std.log.info("swapchain recreated.", .{});
         }
 
-        if (try vk_ctx.acquireFrame()) |resources| {
+        var may_resources = try vk_ctx.acquireFrame();
+        if (may_resources) |*resources| {
+
+            const mouse_move = vk_ctx.glfw_callback.takeMouseMove();
+            if (mouse_move.x != 0 or mouse_move.y != 0) {
+                controller.rotateCamera(mouse_move, 0.002);
+            }
+
+            try resources.beginSettingUniforms();
+            resources.setUniform(.init_ray, .{
+                .camera = controller.camera,
+            });
+            resources.endSettingUniforms();
+
             try resources.drawFrame(.{});
         }
     }

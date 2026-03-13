@@ -38,17 +38,25 @@ pub const Stage = enum {
 };
 
 pub const Partical = extern struct {
-    position: [4]f64,
-    direction: [4]f64,
+    position: [4]f32,
+    direction: [4]f32,
+};
+
+pub const Camera = extern struct {
+    position: [3]f32 align(16),
+    /// normalized
+    direction: [3]f32 align(16),
+    u: [3]f32 align(16),
+    v: [3]f32 align(16),
 };
 
 pub const uniforms = struct {
     pub const init_ray = extern struct {
-        extent: [2]u32,
+        camera: Camera,
     };
 
     pub const render_ray = extern struct {
-        extent: [2]u32,
+        _placeholder: f32,
     };
 };
 

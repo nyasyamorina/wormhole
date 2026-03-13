@@ -3,9 +3,11 @@ const vk = @import("vulkan-zig");
 const glfw = @import("glfw");
 
 const helper = @import("helper.zig");
+const GlfwCallback = @import("GlfwCallback.zig");
 const shader_layout = @import("shader_layout.zig");
 const Stage = shader_layout.Stage;
 const set_layout = shader_layout.set_layout;
+const Controller = @import("Controller.zig");
 
 pub const in_flight_count = 2;
 const Fences = [in_flight_count]vk.Fence;
@@ -21,6 +23,8 @@ const PipelineLayouts = [Stage.all.len]vk.PipelineLayout;
 const Pipelines = [Stage.all.len]vk.Pipeline;
 
 
+controller: *Controller,
+glfw_callback: *GlfwCallback,
 window: *glfw.Window,
 instance: vk.InstanceProxy,
 debug_messenger: vk.DebugUtilsMessengerEXT,
@@ -78,15 +82,19 @@ pub const uniform_sizes = blk: {
     break :blk sizes;
 };
 
-pub fn init() !VulkanContext {
-    const window = try _createWindow();
+pub fn init(controller: *Controller) !VulkanContext {
+    const glfw_callback = try helper.allocator.create(GlfwCallback);
+    errdefer helper.allocator.destroy(glfw_callback);
+    glfw_callback.* = .{};
+
+    const window = try _createWindow(glfw_callback);
     errdefer window.destroy();
 
     const instance = try _createInstance(helper.allocator);
     errdefer instance.destroyInstance(null);
 
     const debug_messenger = try _createDebugMessenger(instance);
-    errdefer instance.destroyDebugUtilsMessengerEXT(debug_messenger, null);
+    errdefer if (helper.is_debug) instance.destroyDebugUtilsMessengerEXT(debug_messenger, null);
 
     const surface = try _createSurface(instance, window);
     errdefer instance.destroySurfaceKHR(surface, null);
@@ -109,6 +117,7 @@ pub fn init() !VulkanContext {
 
     const queue = _getQueue(device, queue_family);
     const swapchain_info = try _getSwapchainInfo(helper.allocator, instance, physical_device, window, surface);
+    controller.setCameraAspectRatio(swapchain_info.image_extent);
 
     const command_pool = try _createCommandPool(device, queue_family);
     errdefer device.destroyCommandPool(command_pool, null);
@@ -142,6 +151,8 @@ pub fn init() !VulkanContext {
     errdefer for (pipeline_layouts) |l| device.destroyPipelineLayout(l, null);
 
     return .{
+        .controller = controller,
+        .glfw_callback = glfw_callback,
         .window = window,
         .instance = instance,
         .debug_messenger = debug_messenger,
@@ -175,9 +186,10 @@ pub fn init() !VulkanContext {
 }
 
 pub fn deinit(self: *VulkanContext) void {
+    defer helper.allocator.destroy(self.glfw_callback);
     defer self.window.destroy();
     defer self.instance.destroyInstance(null);
-    defer self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
+    defer if (helper.is_debug) self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
     defer self.instance.destroySurfaceKHR(self.surface, null);
     defer self.device.destroyDevice(null);
     defer self.device.destroyCommandPool(self.command_pool, null);
@@ -215,20 +227,18 @@ fn _aligAppendSize(size: u64, alignment: u64) u64 {
     return (alignment - (size & (alignment - 1))) & (alignment - 1);
 }
 
-fn _createWindow() !*glfw.Window {
+fn _createWindow(glfw_callback: *GlfwCallback) !*glfw.Window {
     glfw.Window.Hint.set.clientApi(.no_api);
     glfw.Window.Hint.set.resizable(true);
     glfw.Window.Hint.set.transparentFramebuffer(true);
 
     const window = glfw.Window.create(.{ .width = 800, .height = 600 }, "wormhole", null, null) orelse return error.FaildToCreateWindow;
 
-    // TODO: callbacks
-    //window.setUserPointer(user_data: ?*anyopaque)
-    //window.setFramebufferSizeCallback(cb: ?*const fn (*Window, c_int, c_int) void)
-    //window.setScrollCallback(cb: ?*const fn (*Window, f64, f64) void)
-    //window.setMouseButtonCallback(cb: ?*const fn (*Window, MouseButton, ActionPadded, Modifier) void)
-    //window.setKeyCallback(cb: ?*const fn (*Window, Key, c_int, ActionPadded, Modifier) void)
-    //...
+    window.setInputMode(.cursor, .disable);
+
+    window.setUserPointer(@ptrCast(glfw_callback));
+    _ = window.setFramebufferSizeCallback(&GlfwCallback.resizeCB);
+    _ = window.setCursorPosCallback(&GlfwCallback.mouseMoveCB);
 
     return window;
 }
@@ -533,7 +543,7 @@ fn _getSwapchainInfo(allocator: std.mem.Allocator, instance: vk.InstanceProxy, p
     defer allocator.free(surface_formats);
     var choose_idx: ?usize = null;
     for (surface_formats, 0..) |format, idx| {
-        if (format.format == .b8g8r8a8_unorm) {
+        if (format.format == .r8g8b8a8_unorm) {
             choose_idx = idx;
             if (format.color_space == .srgb_nonlinear_khr) break;
         }
@@ -911,6 +921,59 @@ pub fn recreateSwapchain(self: *VulkanContext) !void {
             storage_views[f][i] = try _createImageView(self.device, storage_images[f][i], .r32g32b32a32_sfloat);
         };
 
+        // transite image layout
+        {
+            // create one-time command buffer
+            var command: vk.CommandBufferProxy = .{ .handle = .null_handle, .wrapper = self.device.wrapper };
+            try self.device.allocateCommandBuffers(&.{
+                .command_pool = self.command_pool,
+                .level = .primary,
+                .command_buffer_count = 1,
+            }, @ptrCast(&command.handle));
+            defer self.device.freeCommandBuffers(self.command_pool, 1, @ptrCast(&command.handle));
+
+            // record commands
+            try command.beginCommandBuffer(&.{});
+            for (storage_images) |im1| for (im1) |im| {
+                command.pipelineBarrier2(&.{
+                    .image_memory_barrier_count = 1,
+                    .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
+                        .image = im,
+                        .subresource_range = .{
+                            .aspect_mask = .{ .color_bit = true },
+                            .base_mip_level = 0,
+                            .level_count = 1,
+                            .base_array_layer = 0,
+                            .layer_count = 1,
+                        },
+
+                        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                        .src_stage_mask = .{ .top_of_pipe_bit = true },
+                        .src_access_mask = .{},
+                        .old_layout = .undefined,
+
+                        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                        .dst_stage_mask = .{ .compute_shader_bit = true },
+                        .dst_access_mask = .{ .shader_write_bit = true },
+                        .new_layout = .general,
+                    } },
+                });
+            };
+            try command.endCommandBuffer();
+
+            // submit
+            const queue: vk.QueueProxy = .{ .handle = self.queue, .wrapper = self.device.wrapper };
+            try queue.submit(1, &.{ vk.SubmitInfo {
+                .command_buffer_count = 1,
+                .p_command_buffers = &.{command.handle},
+            } }, .null_handle);
+
+            try queue.waitIdle();
+        }
+
+        try self.device.deviceWaitIdle();
+    //=//=//=// vvv No Error Context vvv
+
         if (realloc_memory) {
             // free old memory
             self.device.freeMemory(self.storage_memory, null);
@@ -920,6 +983,10 @@ pub fn recreateSwapchain(self: *VulkanContext) !void {
             self.storage_size = total_size;
             self.storage_memory_type = memory_type;
         }
+
+        // destroy images and views
+        for (self.storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
+        for (self.storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
 
         // store new storage images and views
         self.storage_extent = self.swapchain_info.image_extent;
@@ -1030,18 +1097,34 @@ pub const FrameResouces = struct {
         const group_y = std.math.divCeil(u32, self.extent.height, 16) catch unreachable;
 
         const computing_command: vk.CommandBufferProxy = .{ .handle = self.computing_command, .wrapper = self.device.wrapper };
-
         const rendering_command: vk.CommandBufferProxy = .{ .handle = self.rendering_command, .wrapper = self.device.wrapper };
-        const rendering_wait_semaphores = [_]vk.Semaphore {self.acquiring_semaphore};
-        const rendering_wait_stages: [rendering_wait_semaphores.len]vk.PipelineStageFlags = .{.{ .compute_shader_bit = true }};
 
-        const presenting_wait_semaphores = [_]vk.Semaphore {self.rendering_semaphore};
+        _ = .{info};
 
-        _ = .{info, computing_command};
+        try computing_command.resetCommandBuffer(.{});
+        try computing_command.beginCommandBuffer(&.{});
+        { // init ray
+            const stage = Stage.init_ray;
+            const uniform_set = self.sets[@intFromEnum(stage)];
+            const storage_set = self.sets[Stage.all.len];
+            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
+            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
+            const pipeline = self.pipelines[@intFromEnum(stage)];
 
+            computing_command.bindPipeline(.compute, pipeline);
+            computing_command.bindDescriptorSets(
+                .compute, pipeline_layout,
+                0, set_count, &.{uniform_set, storage_set},
+                0, null,
+            );
+            computing_command.dispatch(group_x, group_y, 1);
+        }
+        try computing_command.endCommandBuffer();
+
+        try rendering_command.resetCommandBuffer(.{});
+        try rendering_command.beginCommandBuffer(&.{});
         { // render ray
             const stage = Stage.render_ray;
-            const command = rendering_command;
             const uniform_set = self.sets[@intFromEnum(stage)];
             const storage_set = self.sets[Stage.all.len];
             const surface_set = self.sets[Stage.all.len + 1];
@@ -1049,10 +1132,7 @@ pub const FrameResouces = struct {
             const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
             const pipeline = self.pipelines[@intFromEnum(stage)];
 
-            try command.resetCommandBuffer(.{});
-            try command.beginCommandBuffer(&.{});
-
-            command.pipelineBarrier2(&.{
+            rendering_command.pipelineBarrier2(&.{
                 .image_memory_barrier_count = 1,
                 .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
                     .image = self.swapchain_image,
@@ -1076,15 +1156,15 @@ pub const FrameResouces = struct {
                 } },
             });
 
-            command.bindPipeline(.compute, pipeline);
-            command.bindDescriptorSets(
+            rendering_command.bindPipeline(.compute, pipeline);
+            rendering_command.bindDescriptorSets(
                 .compute, pipeline_layout,
                 0, set_count, &.{uniform_set, storage_set, surface_set},
                 0, null,
             );
-            command.dispatch(group_x, group_y, 1);
+            rendering_command.dispatch(group_x, group_y, 1);
 
-            command.pipelineBarrier2(&.{
+            rendering_command.pipelineBarrier2(&.{
                 .image_memory_barrier_count = 1,
                 .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
                     .image = self.swapchain_image,
@@ -1107,25 +1187,32 @@ pub const FrameResouces = struct {
                     .new_layout = .present_src_khr,
                 } },
             });
-
-            try command.endCommandBuffer();
         }
+        try rendering_command.endCommandBuffer();
 
-        try queue.submit(1, &.{ vk.SubmitInfo {
-            .command_buffer_count = 1,
-            .p_command_buffers = &.{rendering_command.handle},
-            .wait_semaphore_count = rendering_wait_semaphores.len,
-            .p_wait_semaphores = &rendering_wait_semaphores,
-            .p_wait_dst_stage_mask = &rendering_wait_stages,
-            .signal_semaphore_count = presenting_wait_semaphores.len,
-            .p_signal_semaphores = &presenting_wait_semaphores,
-        } }, self.fence);
+        try queue.submit(2, &.{
+            vk.SubmitInfo {
+                .command_buffer_count = 1,
+                .p_command_buffers = &.{computing_command.handle},
+                .signal_semaphore_count = 1,
+                .p_signal_semaphores = @ptrCast(&self.computing_semaphore),
+            },
+            vk.SubmitInfo {
+                .command_buffer_count = 1,
+                .p_command_buffers = &.{rendering_command.handle},
+                .wait_semaphore_count = 2,
+                .p_wait_semaphores = &.{self.computing_semaphore, self.acquiring_semaphore},
+                .p_wait_dst_stage_mask = &.{.{ .compute_shader_bit = true }, .{ .compute_shader_bit = true } },
+                .signal_semaphore_count = 1,
+                .p_signal_semaphores = @ptrCast(&self.rendering_semaphore),
+            },
+        }, self.fence);
         const present_result = queue.presentKHR(&.{
             .swapchain_count = 1,
             .p_swapchains = &.{self.swapchain},
             .p_image_indices = &.{self.swapchain_index},
-            .wait_semaphore_count = presenting_wait_semaphores.len,
-            .p_wait_semaphores = &presenting_wait_semaphores,
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = @ptrCast(&self.rendering_semaphore),
         });
 
         if (present_result) |result| switch (result) {
@@ -1140,6 +1227,14 @@ pub const FrameResouces = struct {
 };
 
 pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
+    // glfw callback
+    if (self.glfw_callback.takeResizeInfo()) |extent| {
+        self.swapchain_info.image_extent = extent;
+        self.swapchain_outdate = true;
+        self.controller.setCameraAspectRatio(extent);
+        return null;
+    }
+
     const fence = self.frame_fences[self.next_frame];
 
     var wait_count: usize = 0;
