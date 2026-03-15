@@ -71,33 +71,47 @@ pub fn main() !void {
 }
 
 const base_shaders = struct {
-    pub const utils: []const u8 = @embedFile("shaders/utils.slang");
-    pub const init_ray: []const u8 = @embedFile("shaders/init_ray.slang");
-    pub const render_ray: []const u8 = @embedFile("shaders/render_ray.slang");
+    pub const utils: []const u8 = @embedFile("utils.slang.xz");
+    pub const init_ray: []const u8 = @embedFile("init_ray.slang.xz");
+    pub const render_ray: []const u8 = @embedFile("render_ray.slang.xz");
 };
+
+// null stage for `utils.slang`
+fn writeSlangShader(cwd: std.fs.Dir, name: []const u8, stage: ?shader_layout.Stage) !void {
+    const xz_data = if (stage) |s| s.getNamedStatic(base_shaders) else base_shaders.utils;
+
+    const file = try cwd.createFile(name, .{});
+    defer file.close();
+
+    const write_buf = try helper.allocator.alloc(u8, 4096);
+    defer helper.allocator.free(write_buf);
+    var writer = file.writer(write_buf);
+
+    var xz_reader = std.Io.Reader.fixed(xz_data);
+    const old_xz_reader: std.Io.GenericReader(*std.Io.Reader, std.Io.Reader.Error, std.Io.Reader.readSliceShort) = .{ .context = &xz_reader };
+    var decompresser = try std.compress.xz.decompress(helper.allocator, old_xz_reader);
+    defer decompresser.deinit();
+
+    const old_reader = decompresser.reader();
+    var reader = old_reader.adaptToNewApi(&.{});
+
+    _ = try reader.new_interface.streamRemaining(&writer.interface);
+    try writer.interface.flush();
+}
 
 fn compileSlangShader(cwd: if (helper.is_windows) []const u8 else std.fs.Dir, slangc: []const u8, stage: shader_layout.Stage, out: []const u8) !void {
     const in = try std.fmt.allocPrint(helper.allocator, "{s}.slang", .{@tagName(stage)});
     defer helper.allocator.free(in);
 
-    cwd.access(in, .{}) catch |err| switch (err) {
+    const cwd_dir = if (helper.is_windows) try helper.cwd.openDir(cwd, .{}) else cwd;
+
+    cwd_dir.access(in, .{}) catch |err| switch (err) {
         error.FileNotFound => {
-            cwd.access("utils.slang", .{}) catch |err2| switch (err2) {
-                error.FileNotFound => {
-                    const utils_slang = try cwd.createFile("utils.slang", .{});
-                    defer utils_slang.close();
-                    var writer = utils_slang.writer(&.{});
-                    try writer.interface.writeAll(base_shaders.utils);
-                    try writer.interface.flush();
-                },
+            cwd_dir.access("utils.slang", .{}) catch |err2| switch (err2) {
+                error.FileNotFound => try writeSlangShader(cwd_dir, "utils.slang", null),
                 else => return err2,
             };
-
-            const slang = try cwd.createFile(in, .{});
-            defer slang.close();
-            var writer = slang.writer(&.{});
-            try writer.interface.writeAll(stage.getNamedStatic(base_shaders));
-            try writer.interface.flush();
+            try writeSlangShader(cwd_dir, in, stage);
         },
         else => return err,
     };

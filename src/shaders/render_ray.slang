@@ -55,7 +55,7 @@ float startfieldBrightness(float3 direction) {
 
 float startfieldBVIndex(float3 direction) {
     const float scale = 30.0;
-    const float b_v_min = -0.4;
+    const float b_v_min = -0.5;
     const float b_v_max = 1.8;
     const float white_concentration = 0.1;
     const float white_b_v = 0.656;
