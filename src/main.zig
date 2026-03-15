@@ -32,7 +32,7 @@ pub fn main() !void {
         .position = .{0, 0, 0},
         .direction = .{0.2, 1, 0.1},
         .view_up = .{0, 0, 1},
-        .fov_v = 90,
+        .fov_v = 60,
     });
 
     var vk_ctx: VulkanContext = try .init(&controller);

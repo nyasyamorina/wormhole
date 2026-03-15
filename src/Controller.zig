@@ -33,11 +33,13 @@ pub fn initCamera(self: *Controller, info: CameraInitInfo) void {
     const u_n = math.normalize(math.cross(d, info.view_up));
     const v_n = math.cross(u_n, d);
 
+    const scale: @Vector(3, f32) = @splat(@tan(info.fov_v * (std.math.pi / 180.0 / 2.0)));
+
     self.camera = .{
         .position = info.position,
         .direction = d,
-        .u = u_n,
-        .v = v_n,
+        .u = scale * u_n,
+        .v = scale * v_n,
     };
 }
 pub fn setCameraAspectRatio(self: *Controller, extent: vk.Extent2D) void {

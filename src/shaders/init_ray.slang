@@ -29,7 +29,7 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     Partical ray;
     ray.position = float4(uniform.camera.position, 1.0);
 
-    float2 uv = getScreenUV(thread_id.xy, extent);
+    float2 uv = getScreenCoordinate(thread_id.xy, extent);
     float3 direction = uv.x * uniform.camera.u + uv.y * uniform.camera.v + uniform.camera.direction;
     ray.direction = float4(direction, 0.0);
 
