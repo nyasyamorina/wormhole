@@ -34,10 +34,13 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     ray.direction = ray_direction_tex.Load(thread_id.xy);
     ray.direction.xyz = normalize(ray.direction.xyz);
 
-    //float3 color = float3(ray.direction.xyz > 0.0);
-    float brightness = startfieldBrightness(ray.direction.xyz);
-    float b_v = startfieldBVIndex(ray.direction.xyz);
-    float3 color = brightness * BVIndexToRgb(b_v);
+    float startfield_brightness = startfieldBrightness(ray.direction.xyz);
+    float startfield_b_v = startfieldBVIndex(ray.direction.xyz);
+    float3 color = startfield_brightness * BVIndexToRgb(startfield_b_v);
+
+    float nebulae_brightness = nebulaeBrightness(ray.direction.xyz);
+    float nebulae_b_v = nebulaeBVIndex(ray.direction.xyz);
+    color += nebulae_brightness * BVIndexToRgb(nebulae_b_v);
 
     color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
 
@@ -55,57 +58,52 @@ float startfieldBrightness(float3 direction) {
 
 float startfieldBVIndex(float3 direction) {
     const float scale = 30.0;
+
+    float noise = simplexNoise3(direction * scale);
+    return noiseToBVIndex(clamp(noise * 0.5 + 0.5, 0.0, 1.0));
+}
+
+float nebulaeBrightness(float3 direction) {
+    const float scale_1 = 1.0;
+    const float amplitude_1 = 0.7;
+    const float scale_2 = 5.0;
+    const float amplitude_2 = 0.08;
+    const float scale_3 = 10.0;
+    const float amplitude_3 = 0.1;
+    const float scale_4 = 40.0;
+    const float amplitude_4 = 0.03;
+
+    float nebulae = amplitude_1 * simplexNoise3(direction * scale_1);
+    float milky_way = 0.8 * (1.0 - 3.2 * sqr(direction.z));
+    float mix = 0.15 + 5.0 * sqr(direction.z);
+    float base = clamp(lerp(milky_way, nebulae, min(1.0, mix)), 0.0, 1.0);
+
+    float noise = amplitude_2 * simplexNoise3(direction * scale_2);
+    noise += amplitude_3 * simplexNoise3(direction * scale_3);
+    noise += amplitude_4 * simplexNoise3(direction * scale_4);
+    float noise_base = noise * 0.6 + 0.95;
+    float noise_mix = 0.3 + 3.0 * sqr(direction.z) * (0.5 * direction.x + 0.5);
+    noise_base = max(0.0, (0.07 * direction.x) + lerp(1.05, noise_base, min(1.0, noise_mix)));
+
+    return sqr(base * cub(noise_base));
+}
+
+float nebulaeBVIndex(float3 direction) {
+    const float scale = 0.75;
+    const float amplitude = 0.25;
+    const float shift = -0.3;
+
+    float noise = shift - amplitude * simplexNoise3(direction * scale);
+    return noiseToBVIndex(clamp(noise * 0.5 + 0.5, 0.0, 1.0));
+}
+
+/// noise in [0, 1]
+float noiseToBVIndex(float noise) {
     const float b_v_min = -0.5;
     const float b_v_max = 1.8;
     const float white_concentration = 0.1;
     const float white_b_v = 0.656;
 
-    float noise = simplexNoise3(direction * scale);
-    float base = clamp(noise * 0.5 + 0.5, 0.0, 1.0);
-    float b_v = (b_v_max - b_v_min) * base + b_v_min;
-
+    float b_v = (b_v_max - b_v_min) * noise + b_v_min;
     return lerp(b_v, white_b_v, white_concentration);
-}
-
-/// from "https://stackoverflow.com/a/22630970"
-/// `b_v` in [-0.4, 2.0]
-float3 BVIndexToRgb(float b_v) {
-    float t;
-    float3 color;
-
-    if (b_v < 0.0) {
-        t = (b_v - -0.4) / (0.0 - -0.4);
-        color.r = (0.1 * t + 0.11) * t + 0.61;
-    } else if (b_v < 0.4) {
-        t = (b_v - 0.0) / (0.4 - 0.0);
-        color.r = 0.18 * t + 0.82; // original: 0.17 * t + 0.83
-    } else {
-        color.r = 1.0;
-    }
-
-    if (b_v < 0.0) {
-        t = (b_v - -0.4) / (0.0 - -0.4);
-        color.g = (0.1 * t + 0.07) * t + 0.7;
-    } else if (b_v < 0.4) {
-        t = (b_v - 0.0) / (0.4 - 0.0);
-        color.g = 0.11 * t + 0.87;
-    } else if (b_v < 1.6) {
-        t = (b_v - 0.4) / (1.6 - 0.4);
-        color.g = -0.16 * t + 0.98;
-    } else {
-        t = (b_v - 1.6) / (2.0 - 1.6);
-        color.g = -0.5 * t * t + 0.82;
-    }
-
-    if (b_v < 0.4) {
-        color.b = 1.0;
-    } else if (b_v < 1.5) {
-        t = (b_v - 0.4) / (1.5 - 0.4);
-        color.b = (0.1 * t - 0.47) * t + 1.0;
-    } else {
-        t = (b_v - 1.5) / (1.94 - 1.5);
-        color.b = max(0.0, -0.6 * t * t + 0.63);
-    }
-
-    return color;
 }

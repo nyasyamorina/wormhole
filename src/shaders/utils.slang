@@ -127,3 +127,48 @@ float sqr(float x) {
 float cub(float x) {
     return x * x * x;
 }
+
+
+/// from "https://stackoverflow.com/a/22630970"
+/// `b_v` in [-0.4, 2.0]
+float3 BVIndexToRgb(float b_v) {
+    float t;
+    float3 color;
+
+    if (b_v < 0.0) {
+        t = (b_v - -0.4) / (0.0 - -0.4);
+        color.r = (0.1 * t + 0.11) * t + 0.61;
+    } else if (b_v < 0.4) {
+        t = (b_v - 0.0) / (0.4 - 0.0);
+        color.r = 0.18 * t + 0.82; // original: 0.17 * t + 0.83
+    } else {
+        color.r = 1.0;
+    }
+
+    if (b_v < 0.0) {
+        t = (b_v - -0.4) / (0.0 - -0.4);
+        color.g = (0.1 * t + 0.07) * t + 0.7;
+    } else if (b_v < 0.4) {
+        t = (b_v - 0.0) / (0.4 - 0.0);
+        color.g = 0.11 * t + 0.87;
+    } else if (b_v < 1.6) {
+        t = (b_v - 0.4) / (1.6 - 0.4);
+        color.g = -0.16 * t + 0.98;
+    } else {
+        t = (b_v - 1.6) / (2.0 - 1.6);
+        color.g = -0.5 * t * t + 0.82;
+    }
+
+    if (b_v < 0.4) {
+        color.b = 1.0;
+    } else if (b_v < 1.5) {
+        t = (b_v - 0.4) / (1.5 - 0.4);
+        color.b = (0.1 * t - 0.47) * t + 1.0;
+    } else {
+        t = (b_v - 1.5) / (1.94 - 1.5);
+        color.b = max(0.0, -0.6 * t * t + 0.63);
+    }
+
+    return color;
+}
+
