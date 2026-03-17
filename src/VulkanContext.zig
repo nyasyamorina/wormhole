@@ -1074,11 +1074,10 @@ pub const FrameResouces = struct {
         self.uniform_mapping = try self.device.mapMemory(self.uniform_memory, self.uniform_range[0], self.uniform_range[1] - self.uniform_range[0], .{});
     }
 
-    pub fn setUniform(self: *FrameResouces, comptime stage: Stage, value: stage.getComptimeNamed(shader_layout.uniforms)) void {
+    pub fn uniform(self: *FrameResouces, comptime stage: Stage) *stage.getComptimeNamed(shader_layout.uniforms) {
         const offset = self.uniform_offsets[@intFromEnum(stage)];
         const data = &@as([*]u8, @ptrCast(self.uniform_mapping.?))[offset];
-        const uniform: *stage.getComptimeNamed(shader_layout.uniforms) = @ptrCast(@alignCast(data));
-        uniform.* = value;
+        return @ptrCast(@alignCast(data));
     }
 
     pub fn endSettingUniforms(self: *FrameResouces) void {

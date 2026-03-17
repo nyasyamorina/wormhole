@@ -24,7 +24,7 @@ float2 getScreenCoordinate(uint2 thread_id, uint2 extent) {
 
 
 float crosshair(uint2 thread_id, uint2 extent) {
-    const float size = 0.01;
+    const float size = 0.007;
     const float threshold = 0.75;
 
     float2 uv = getScreenCoordinate(thread_id.xy, extent);
@@ -171,4 +171,3 @@ float3 BVIndexToRgb(float b_v) {
 
     return color;
 }
-

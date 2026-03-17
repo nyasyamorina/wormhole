@@ -60,9 +60,9 @@ pub fn main() !void {
             }
 
             try resources.beginSettingUniforms();
-            resources.setUniform(.init_ray, .{
+            resources.uniform(.init_ray).* = .{
                 .camera = controller.camera,
-            });
+            };
             resources.endSettingUniforms();
 
             try resources.drawFrame(.{});

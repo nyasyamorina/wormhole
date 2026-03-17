@@ -34,14 +34,19 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     ray.direction = ray_direction_tex.Load(thread_id.xy);
     ray.direction.xyz = normalize(ray.direction.xyz);
 
+    float3 color = 0.0;
+
+    // startfield
     float startfield_brightness = startfieldBrightness(ray.direction.xyz);
     float startfield_b_v = startfieldBVIndex(ray.direction.xyz);
-    float3 color = startfield_brightness * BVIndexToRgb(startfield_b_v);
+    color += startfield_brightness * BVIndexToRgb(startfield_b_v);
 
+    // nebulae
     float nebulae_brightness = nebulaeBrightness(ray.direction.xyz);
     float nebulae_b_v = nebulaeBVIndex(ray.direction.xyz);
     color += nebulae_brightness * BVIndexToRgb(nebulae_b_v);
 
+    // crosshair
     color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
 
     surface.Store(thread_id.xy, float4(color, 1.0));
@@ -67,15 +72,15 @@ float nebulaeBrightness(float3 direction) {
     const float scale_1 = 1.0;
     const float amplitude_1 = 0.7;
     const float scale_2 = 5.0;
-    const float amplitude_2 = 0.08;
+    const float amplitude_2 = 0.1;
     const float scale_3 = 10.0;
-    const float amplitude_3 = 0.1;
-    const float scale_4 = 40.0;
-    const float amplitude_4 = 0.03;
+    const float amplitude_3 = 0.08;
+    const float scale_4 = 20.0;
+    const float amplitude_4 = 0.035;
 
     float nebulae = amplitude_1 * simplexNoise3(direction * scale_1);
     float milky_way = 0.8 * (1.0 - 3.2 * sqr(direction.z));
-    float mix = 0.15 + 5.0 * sqr(direction.z);
+    float mix = 0.15 + 5.0 * sqr(direction.z) - (0.07 * direction.x);
     float base = clamp(lerp(milky_way, nebulae, min(1.0, mix)), 0.0, 1.0);
 
     float noise = amplitude_2 * simplexNoise3(direction * scale_2);
@@ -89,13 +94,14 @@ float nebulaeBrightness(float3 direction) {
 }
 
 float nebulaeBVIndex(float3 direction) {
-    const float scale = 0.75;
+    const float scale = 2.5;
     const float amplitude = 0.25;
-    const float shift = -0.3;
+    const float shift = -0.1;
 
     float noise = shift - amplitude * simplexNoise3(direction * scale);
     return noiseToBVIndex(clamp(noise * 0.5 + 0.5, 0.0, 1.0));
 }
+
 
 /// noise in [0, 1]
 float noiseToBVIndex(float noise) {
