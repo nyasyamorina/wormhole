@@ -43,7 +43,6 @@ pub const Partical = extern struct {
 };
 
 pub const Camera = extern struct {
-    position: [3]f32 align(16),
     /// normalized
     direction: [3]f32 align(16),
     u: [3]f32 align(16),
@@ -53,6 +52,8 @@ pub const Camera = extern struct {
 pub const uniforms = struct {
     pub const init_ray = extern struct {
         camera: Camera,
+        position: [4]f32 align(16),
+        speed: [3]f32 align(16),
     };
 
     pub const render_ray = extern struct {

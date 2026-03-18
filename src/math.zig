@@ -8,11 +8,8 @@ const shader_layout = @import("shader_layout.zig");
 pub fn dot(u: anytype, v: @TypeOf(u)) @typeInfo(@TypeOf(u)).vector.child {
     return @reduce(.Add, u * v);
 }
-pub fn lengthSqr(v: anytype) @typeInfo(@TypeOf(v)).vector.child {
-    return dot(v, v);
-}
 pub fn length(v: anytype) @typeInfo(@TypeOf(v)).vector.child {
-    return @sqrt(lengthSqr(v));
+    return @sqrt(dot(v, v));
 }
 pub fn normalize(v: anytype) @TypeOf(v) {
     const l = length(v);

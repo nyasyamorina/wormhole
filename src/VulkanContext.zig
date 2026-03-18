@@ -87,8 +87,9 @@ pub fn init(controller: *Controller) !VulkanContext {
     errdefer helper.allocator.destroy(glfw_callback);
     glfw_callback.* = .{};
 
-    const window = try _createWindow(glfw_callback);
+    const window = try _createWindow();
     errdefer window.destroy();
+    glfw_callback.setCallbacks(window);
 
     const instance = try _createInstance(helper.allocator);
     errdefer instance.destroyInstance(null);
@@ -117,7 +118,7 @@ pub fn init(controller: *Controller) !VulkanContext {
 
     const queue = _getQueue(device, queue_family);
     const swapchain_info = try _getSwapchainInfo(helper.allocator, instance, physical_device, window, surface);
-    controller.setCameraAspectRatio(swapchain_info.image_extent);
+    controller.camera.setAspectRatio(swapchain_info.image_extent);
 
     const command_pool = try _createCommandPool(device, queue_family);
     errdefer device.destroyCommandPool(command_pool, null);
@@ -227,19 +228,18 @@ fn _aligAppendSize(size: u64, alignment: u64) u64 {
     return (alignment - (size & (alignment - 1))) & (alignment - 1);
 }
 
-fn _createWindow(glfw_callback: *GlfwCallback) !*glfw.Window {
+fn _createWindow() !*glfw.Window {
     glfw.Window.Hint.set.clientApi(.no_api);
     glfw.Window.Hint.set.resizable(true);
-    glfw.Window.Hint.set.transparentFramebuffer(true);
+    glfw.Window.Hint.set.transparentFramebuffer(false);
 
-    const window = glfw.Window.create(.{ .width = 800, .height = 600 }, "wormhole", null, null) orelse return error.FaildToCreateWindow;
+    const window = glfw.Window.create(.{ .width = 800, .height = 600 }, "wormhole", null, null) orelse {
+        const result = glfw.getError();
+        std.log.scoped(.glfw).err("failed to create window: ({t}) {s}", .{result.code, result.description orelse ""});
+        return error.FaildToCreateWindow;
+    };
 
     window.setInputMode(.cursor, .disable);
-
-    window.setUserPointer(@ptrCast(glfw_callback));
-    _ = window.setFramebufferSizeCallback(&GlfwCallback.resizeCB);
-    _ = window.setCursorPosCallback(&GlfwCallback.mouseMoveCB);
-
     return window;
 }
 
@@ -1230,7 +1230,7 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
     if (self.glfw_callback.takeResizeInfo()) |extent| {
         self.swapchain_info.image_extent = extent;
         self.swapchain_outdate = true;
-        self.controller.setCameraAspectRatio(extent);
+        self.controller.camera.setAspectRatio(extent);
         return null;
     }
 

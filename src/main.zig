@@ -23,17 +23,23 @@ pub fn main() !void {
     defer args.deinit();
     try args.load(false);
 
-    if (!glfw.init()) return error.FaildToInitGlfw;
+    if (!glfw.init()) {
+        const result = glfw.getError();
+        std.log.scoped(.glfw).err("failed to initialize glfw: ({t}) {s}", .{result.code, result.description orelse ""});
+        return error.FaildToInitGlfw;
+    }
     defer glfw.terminate();
 
-    var controller: Controller = try .init();
-    defer controller.deinit();
-    controller.initCamera(.{
-        .position = .{0, 0, 0},
-        .direction = .{0.2, 1, 0.1},
-        .view_up = .{0, 0, 1},
-        .fov_v = 60,
-    });
+    var controller: Controller = .{
+        .camera = .init(.{
+            .direction = .{0, 1, 0},
+            .view_up = .{0, 0, 1},
+            .fov_v = 60,
+        }),
+        .position = .{0, 0, 0, 0},
+        .velocity = .{0, 0, 0},
+        .acceleration = 0.1,
+    };
 
     var vk_ctx: VulkanContext = try .init(&controller);
     defer vk_ctx.deinit();
@@ -53,15 +59,25 @@ pub fn main() !void {
 
         var may_resources = try vk_ctx.acquireFrame();
         if (may_resources) |*resources| {
+            const dt: f32 = @floatCast(@as(f64, @floatFromInt(resources.prev_frame_time)) / std.time.ns_per_s);
 
             const mouse_move = vk_ctx.glfw_callback.takeMouseMove();
-            if (mouse_move.x != 0 or mouse_move.y != 0) {
-                controller.rotateCamera(mouse_move, 0.002);
+            if (mouse_move[0] != 0 or mouse_move[1] != 0) {
+                controller.camera.rotate(mouse_move, 0.002);
             }
+
+            const movement = vk_ctx.glfw_callback.takeMovement();
+            if (movement[0] != 0 or movement[1] != 0 or movement[2] != 0) {
+                controller.accelerate(movement, dt);
+            }
+
+            controller.step(dt);
 
             try resources.beginSettingUniforms();
             resources.uniform(.init_ray).* = .{
-                .camera = controller.camera,
+                .camera = controller.camera.into(),
+                .position = controller.position,
+                .speed = controller.velocity,
             };
             resources.endSettingUniforms();
 

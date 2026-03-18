@@ -29,22 +29,30 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     surface.GetDimensions(extent.x, extent.y);
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
-    Partical ray;
-    ray.position = ray_position_tex.Load(thread_id.xy);
-    ray.direction = ray_direction_tex.Load(thread_id.xy);
-    ray.direction.xyz = normalize(ray.direction.xyz);
+    float4 ray = ray_direction_tex.Load(thread_id.xy);
 
+    // note that the Doppler effect in relativity is purely cause by coordinate transformation,
+    // because `ray` has 0 space-time length, `k * ray` also has 0 space-time length, where `k` is any real number,
+    // although `k * any` is a valid ray, and has the same direction as `ray`, but its time component is changed,
+    // and that is what cause the wavelength of light changed.
+    // because we are sending light "back in time", the time component is negative.
+    float freq_scale = -1.0 / ray.w;
+
+    float3 ray_space = normalize(ray.xyz);
     float3 color = 0.0;
 
-    // startfield
-    float startfield_brightness = startfieldBrightness(ray.direction.xyz);
-    float startfield_b_v = startfieldBVIndex(ray.direction.xyz);
-    color += startfield_brightness * BVIndexToRgb(startfield_b_v);
+    // starfield
+    float starfield_bright = starfieldBright(ray_space);
+    float starfield_temp = starfieldTemp(ray_space);
+    color += renderBlackBody(starfield_bright, starfield_temp, freq_scale);
 
     // nebulae
-    float nebulae_brightness = nebulaeBrightness(ray.direction.xyz);
-    float nebulae_b_v = nebulaeBVIndex(ray.direction.xyz);
-    color += nebulae_brightness * BVIndexToRgb(nebulae_b_v);
+    float nebulae_bright = nebulaeBright(ray_space);
+    float nebulae_temp = nebulaeTemp(ray_space);
+    color += renderBlackBody(nebulae_bright, nebulae_temp, freq_scale);
+
+    // tone mapping
+    color = acesToneMap(color);
 
     // crosshair
     color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
@@ -53,22 +61,22 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
 }
 
 
-float startfieldBrightness(float3 direction) {
+float starfieldBright(float3 direction) {
     const float scale = 200.0;
 
     float noise = simplexNoise3(direction * scale);
     float base = clamp(noise * 0.5 + 0.5, 0.0, 1.0);
-    return sqr(cub(cub(base)));
+    return 1.2 * sqr(cub(cub(base)));
 }
 
-float startfieldBVIndex(float3 direction) {
+float starfieldTemp(float3 direction) {
     const float scale = 30.0;
 
     float noise = simplexNoise3(direction * scale);
-    return noiseToBVIndex(clamp(noise * 0.5 + 0.5, 0.0, 1.0));
+    return noiseToTemp(clamp(noise * 0.3 + 0.5, 0.0, 1.0));
 }
 
-float nebulaeBrightness(float3 direction) {
+float nebulaeBright(float3 direction) {
     const float scale_1 = 1.0;
     const float amplitude_1 = 0.7;
     const float scale_2 = 5.0;
@@ -88,28 +96,51 @@ float nebulaeBrightness(float3 direction) {
     noise += amplitude_4 * simplexNoise3(direction * scale_4);
     float noise_base = noise * 0.6 + 0.95;
     float noise_mix = 0.3 + 3.0 * sqr(direction.z) * (0.5 * direction.x + 0.5);
-    noise_base = max(0.0, (0.07 * direction.x) + lerp(1.05, noise_base, min(1.0, noise_mix)));
+    noise_base = max(0.0, (0.1 * direction.x) + lerp(1.05, noise_base, min(1.0, noise_mix)));
 
     return sqr(base * cub(noise_base));
 }
 
-float nebulaeBVIndex(float3 direction) {
+float nebulaeTemp(float3 direction) {
     const float scale = 2.5;
     const float amplitude = 0.25;
     const float shift = -0.1;
 
-    float noise = shift - amplitude * simplexNoise3(direction * scale);
-    return noiseToBVIndex(clamp(noise * 0.5 + 0.5, 0.0, 1.0));
+    float noise = shift - amplitude * simplexNoise3(direction * scale + 2.0);
+    return noiseToTemp(clamp(noise * 0.5 + 0.5, 0.0, 1.0));
 }
 
 
 /// noise in [0, 1]
-float noiseToBVIndex(float noise) {
-    const float b_v_min = -0.5;
-    const float b_v_max = 1.8;
-    const float white_concentration = 0.1;
-    const float white_b_v = 0.656;
+float noiseToTemp(float noise) {
+    const float temp_min = 3.0; // 1000K
+    const float temp_max = 30.0; // 1000K
+    const float white_concentration = 0.2;
+    const float white_temp = 6.95; // it should be 6.5, but the black body coloring function is not accurate
 
-    float b_v = (b_v_max - b_v_min) * noise + b_v_min;
-    return lerp(b_v, white_b_v, white_concentration);
+    const float mired_min = 1.0 / temp_max;
+    const float mired_max = 1.0 / temp_min;
+    const float white_mired = 1.0 / white_temp;
+
+    float mired = (mired_max - mired_min) * noise + mired_min;
+    mired = lerp(mired, white_mired, white_concentration);
+
+    return 1.0 / mired;
+}
+
+float3 renderBlackBody(float bright, float temp, float freq_scale) {
+    // normalize the black body radiation to target brightness
+    float bright_norm = 1.0 / black_body::luminance(temp);
+
+    // in black body radiation, wavelength scaling can be calculated by scaling temperature and brightness instead.
+    // `B(λ,T) dλ -> B(sλ,T) d(sλ) = B(λ,sT)/s^4 dλ`
+    bright *= sqr(sqr(freq_scale));
+    temp *= freq_scale;
+    temp = clamp(temp, 2.0, 30.0);
+
+    float bb_bright = black_body::luminance(temp);
+    float3 bb_color = black_body::relColor(temp);
+
+    float abs_bright = bright_norm * bb_bright * bright;
+    return abs_bright * bb_color;
 }
