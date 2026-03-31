@@ -150,12 +150,12 @@ float3 acesToneMap(float3 color) {
 
 namespace special_relativity {
     /// consider the camera 4-velocity `V` in space-time, it is also the time axis of the tangent space-time of the camera,
-    /// so `V` has space-time length of 1, so the time component of `V` is `V.t = sqrt(1 + dot(V.xyz, V.xyz))`.
+    /// `V` has space-time length of 1, so the time component of `V` is `V.t = sqrt(1 + dot(V.xyz, V.xyz))`.
     ///
     /// consider a Lorenz transformation `L` that transform the global time axis `{1,0,0,0}` into `V`,
-    /// `L` can also transform vector in tangent space-time to global space-time.
+    /// and `L` can also transform vector in tangent space-time to global space-time.
     ///
-    /// the camera speed for the "global observer" is `v = length(V.xyz) / V.t`,
+    /// the speed of the camera for "global observers" is `v = length(V.xyz) / V.t`,
     /// so the Lorenz factor of `L` is `γ = 1 / sqrt(1 - β * β)`, where `β = v/c` and `c` is the speed of light, we set `c = 1` here.
     /// then yields `γ = V.t`.
     ///
@@ -178,27 +178,81 @@ namespace special_relativity {
 }
 
 
-/// fited in temperature range [2, 30]*1000
+/// temperature range [2, 30]*1000 K
 namespace black_body {
-    float3 relColor(float T) {
-        return {relR(T), relG(T), relB(T)};
-    }
-    /// max rel error ~1.3%
-    float relR(float T) {
-        return 3.561 * exp(-0.389 * T) + 0.745;
-    }
-    /// max rel error ~4%
-    float relG(float T) {
-        return -3.4 * exp(-0.49 * T) / sqr(T) + 0.00154 * T + 0.956;
-    }
-    /// max rel error ~4%
-    float relB(float T) {
-        float t = exp(-0.13 * T);
-        return (-0.89 * sqr(t) - 1.7) * t + 0.013 * T + 1.704;
+    float relRadiance(float wave_length, float temp) {
+        float t = wave_length * 0.001;
+        return 1.0 / (t * sqr(sqr(t)) * (exp(14.387768775039339 / (t * temp)) - 1.0));
     }
 
-    /// max rel error ~5%
-    float luminance(float T) {
-        return (50.0 * T) / (5.33 * exp(22.1 / T) + 9.7);
+    float luminance(float temp) {
+        float t = 0.0;
+        float wave_length = cie::table_wave_length_begin;
+        for (uint table_index = 0; table_index <= 33; table_index += 1) {
+            t += relRadiance(wave_length, temp) * cie::XYZ_table[table_index].y;
+            wave_length += cie::table_wave_length_step;
+        }
+        return cie::table_wave_length_step * t;
     }
+
+    float3 color(float temp) {
+        float3 t = float3(0.0);
+        float wave_length = cie::table_wave_length_begin;
+        for (uint table_index = 0; table_index <= 33; table_index += 1) {
+            t += relRadiance(wave_length, temp) * cie::XYZ_table[table_index];
+            wave_length += cie::table_wave_length_step;
+        }
+        return cie::table_wave_length_step * cie::XYZ_to_linear_sRGB(t);
+    }
+}
+
+
+namespace cie {
+    float3 XYZ_to_linear_sRGB(float3 xyz) {
+        const float3x3 m = {
+            3.2406255, -1.5372080, -0.4986286,
+            -0.9689307, 1.8757561, 0.0415175,
+            0.0557101, -0.2040211, 1.0569959,
+        };
+        return mul(m, xyz);
+    }
+
+    static const float3 XYZ_table[33] = {
+        {0.001368, 0.000039, 0.006450001},
+        {0.004243, 0.00012, 0.02005001},
+        {0.01431, 0.000396, 0.06785001},
+        {0.04351, 0.00121, 0.2074},
+        {0.13438, 0.004, 0.6456},
+        {0.2839, 0.0116, 1.3856},
+        {0.34828, 0.023, 1.74706},
+        {0.3362, 0.038, 1.77211},
+        {0.2908, 0.06, 1.6692},
+        {0.19536, 0.09098, 1.28764},
+        {0.09564, 0.13902, 0.8129501},
+        {0.03201, 0.20802, 0.46518},
+        {0.0049, 0.323, 0.272},
+        {0.0093, 0.503, 0.1582},
+        {0.06327, 0.71, 0.07824999},
+        {0.1655, 0.862, 0.04216},
+        {0.2904, 0.954, 0.0203},
+        {0.4334499, 0.9949501, 0.008749999},
+        {0.5945, 0.995, 0.0039},
+        {0.7621, 0.952, 0.0021},
+        {0.9163, 0.87, 0.001650001},
+        {1.0263, 0.757, 0.0011},
+        {1.0622, 0.631, 0.0008},
+        {1.0026, 0.503, 0.00034},
+        {0.8544499, 0.381, 0.00019},
+        {0.6424, 0.265, 0.00004999999},
+        {0.4479, 0.175, 0.00002},
+        {0.2835, 0.107, 0.0},
+        {0.1649, 0.061, 0.0},
+        {0.0874, 0.032, 0.0},
+        {0.04677, 0.017, 0.0},
+        {0.0227, 0.00821, 0.0},
+        {0.01135916, 0.004102, 0.0},
+    };
+    static const float table_wave_length_begin = 380.0;
+    static const float table_wave_length_end = 710.0;
+    static const float table_wave_length_step = 10.0;
 }

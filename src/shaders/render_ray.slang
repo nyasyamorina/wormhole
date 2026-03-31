@@ -116,7 +116,7 @@ float noiseToTemp(float noise) {
     const float temp_min = 3.0; // 1000K
     const float temp_max = 30.0; // 1000K
     const float white_concentration = 0.2;
-    const float white_temp = 6.95; // it should be 6.5, but the black body coloring function is not accurate
+    const float white_temp = 6.5;
 
     const float mired_min = 1.0 / temp_max;
     const float mired_max = 1.0 / temp_min;
@@ -138,9 +138,11 @@ float3 renderBlackBody(float bright, float temp, float freq_scale) {
     temp *= freq_scale;
     temp = clamp(temp, 2.0, 30.0);
 
-    float bb_bright = black_body::luminance(temp);
-    float3 bb_color = black_body::relColor(temp);
+    //float bb_bright = black_body::luminance(temp);
+    //float3 bb_color = black_body::relColor(temp);
+    float3 bb_color = black_body::color(temp);
 
-    float abs_bright = bright_norm * bb_bright * bright;
+    //float abs_bright = bright_norm * bb_bright * bright;
+    float abs_bright = bright_norm * bright;
     return abs_bright * bb_color;
 }
