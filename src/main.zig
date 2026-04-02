@@ -46,6 +46,10 @@ pub fn main() !void {
 
     try buildPipelines(&vk_ctx, args.slangc.value, args.shader_folder.value);
 
+    var print_state_failed = false;
+    var last_print_state_time = vk_ctx.frame_timestamp;
+    helper.stdout.interface.print("\nstate:\n\n\n\n\n", .{}) catch {};
+
     if (helper.is_debug) std.log.info("entering main loop...", .{});
     defer if (helper.is_debug) std.log.info("main loop exited.", .{});
     while (!vk_ctx.shouldExit()) {
@@ -66,12 +70,26 @@ pub fn main() !void {
                 controller.camera.rotate(mouse_move, 0.002);
             }
 
+            const scroll = vk_ctx.glfw_callback.takeScroll();
+            if (scroll != 0) {
+                controller.changeAcceleration(scroll);
+            }
+
             const movement = vk_ctx.glfw_callback.takeMovement();
             if (movement[0] != 0 or movement[1] != 0 or movement[2] != 0) {
                 controller.accelerate(movement, dt);
             }
 
             controller.step(dt);
+
+            if (!print_state_failed and vk_ctx.frame_timestamp - last_print_state_time >= std.time.ns_per_s / 2) {
+                if (controller.printState()) {
+                    last_print_state_time = vk_ctx.frame_timestamp;
+                } else |err| {
+                    std.log.warn("failed to print state: {t}", .{err});
+                    print_state_failed = true;
+                }
+            }
 
             try resources.beginSettingUniforms();
             resources.uniform(.init_ray).* = .{
@@ -94,6 +112,7 @@ const base_shaders = struct {
 
 // null stage for `utils.slang`
 fn writeSlangShader(cwd: std.fs.Dir, name: []const u8, stage: ?shader_layout.Stage) !void {
+    std.log.debug("extracting shader file {s}", .{name});
     const xz_data = if (stage) |s| s.getNamedStatic(base_shaders) else base_shaders.utils;
 
     const file = try cwd.createFile(name, .{});
@@ -154,8 +173,9 @@ fn compileSlangShader(cwd: if (helper.is_windows) []const u8 else std.fs.Dir, sl
 
     const shader_compilation = "shader compilation";
     std.log.info("starting {s}:", .{shader_compilation});
-    for (args) |arg| std.debug.print("{s} ", .{arg});
-    std.debug.print("\n", .{});
+    for (args) |arg| helper.stdout.interface.print("{s} ", .{arg}) catch {};
+    helper.stdout.interface.print("\n", .{}) catch {};
+    helper.stdout.interface.flush() catch {};
 
     switch (try process.spawnAndWait()) {
         .Exited => |code| {
@@ -203,6 +223,7 @@ fn buildPipelines(vk_ctx: *VulkanContext, slangc: []const u8, shader_folder: ?[]
     defer if (shader_folder != null) shader_dir.close();
 
     for (shader_layout.Stage.all) |stage| {
+        std.log.info("building pipeline {s}", .{@tagName(stage)});
         const spv_file_name = try std.fmt.allocPrint(helper.allocator, "{s}.spv", .{@tagName(stage)});
         defer helper.allocator.free(spv_file_name);
 

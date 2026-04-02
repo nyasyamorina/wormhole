@@ -33,3 +33,7 @@ pub fn rotate3d(p: anytype, axis: @TypeOf(p), angle: @typeInfo(@TypeOf(p)).vecto
     const tmp_v: @TypeOf(p) = @splat((1 - @cos(angle)) * dot(p, axis));
     return cos_v * p + tmp_v * axis + sin_v * cross(axis, p);
 }
+
+
+/// km/s
+pub const light_speed = 299792.458;

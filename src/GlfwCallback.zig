@@ -19,6 +19,8 @@ press_d: bool = false,
 press_ctrl: bool = false,
 press_space: bool = false,
 
+scroll_y: f64 = 0,
+
 
 const GlfwCallback = @This();
 
@@ -27,7 +29,7 @@ pub fn setCallbacks(self: *GlfwCallback, window: *glfw.Window) void {
     _ = window.setFramebufferSizeCallback(&resizeCB);
     _ = window.setCursorPosCallback(&mouseMoveCB);
     _ = window.setKeyCallback(&keyCB);
-
+    _ = window.setScrollCallback(&scrollCB);
 }
 
 pub fn resizeCB(window: *glfw.Window, width: c_int, height: c_int) callconv(.c) void {
@@ -54,6 +56,11 @@ pub fn keyCB(window: *glfw.Window, key: glfw.Key, scan_code: c_int, action: glfw
         else => {},
     }
     _ = .{scan_code, mods};
+}
+pub fn scrollCB(window: *glfw.Window, x: f64, y: f64) callconv(.c) void {
+    const self = getSelf(window);
+    self.scroll_y += y;
+    _ = x;
 }
 
 fn getSelf(window: *glfw.Window) *GlfwCallback {
@@ -87,4 +94,9 @@ pub fn takeMovement(self: GlfwCallback) [3]i2 {
     direction[2] -= @intFromBool(self.press_ctrl);
 
     return direction;
+}
+pub fn takeScroll(self: *GlfwCallback) f32 {
+    const scroll: f32 = @floatCast(self.scroll_y);
+    self.scroll_y -= scroll;
+    return scroll;
 }

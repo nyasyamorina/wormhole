@@ -136,7 +136,6 @@ float3 renderBlackBody(float bright, float temp, float freq_scale) {
     // `B(λ,T) dλ -> B(sλ,T) d(sλ) = B(λ,sT)/s^4 dλ`
     bright *= sqr(sqr(freq_scale));
     temp *= freq_scale;
-    temp = clamp(temp, 2.0, 30.0);
 
     //float bb_bright = black_body::luminance(temp);
     //float3 bb_color = black_body::relColor(temp);

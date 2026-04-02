@@ -28,7 +28,13 @@ pub const allocator: std.mem.Allocator = if (is_safe_mode) debug_alloc.allocator
 
 pub const cwd = std.fs.cwd();
 
+var stdout_buff: [512]u8 = undefined;
+var stdout_handle: std.fs.File = undefined;
+pub var stdout: std.fs.File.Writer = undefined;
+
 pub fn init() !void {
+    stdout_handle = .stdout();
+    stdout = stdout_handle.writer(&stdout_buff);
 }
 
 pub fn deinit() void {
