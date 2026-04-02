@@ -233,7 +233,7 @@ fn _createWindow() !*glfw.Window {
     glfw.Window.Hint.set.resizable(true);
     glfw.Window.Hint.set.transparentFramebuffer(false);
 
-    const window = glfw.Window.create(.{ .width = 800, .height = 600 }, "wormhole", null, null) orelse {
+    const window = glfw.Window.create(.{ .width = 800, .height = 600 }, "special-relativity", null, null) orelse {
         const result = glfw.getError();
         std.log.scoped(.glfw).err("failed to create window: ({t}) {s}", .{result.code, result.description orelse ""});
         return error.FaildToCreateWindow;

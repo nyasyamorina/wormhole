@@ -32,11 +32,12 @@ pub fn build(b: *std.Build) !void {
         },
     });
     //main_module.linkSystemLibrary(vulkan_dll_name, .{});
+    if (target.result.os.tag == .windows) main_module.addLibraryPath(b.path("pack-stuff/windows"));
     main_module.linkSystemLibrary("glfw3", .{});
     try addCompressedShaders(b, main_module);
 
     b.installArtifact(b.addExecutable(.{
-        .name = "wormhole",
+        .name = "special-relativity",
         .root_module = main_module,
         .use_llvm = true, // for lldb debug
     }));

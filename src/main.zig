@@ -38,7 +38,7 @@ pub fn main() !void {
         }),
         .position = .{0, 0, 0, 0},
         .velocity = .{0, 0, 0},
-        .acceleration = 0.1,
+        .thrust = 0.1,
     };
 
     var vk_ctx: VulkanContext = try .init(&controller);
@@ -72,7 +72,7 @@ pub fn main() !void {
 
             const scroll = vk_ctx.glfw_callback.takeScroll();
             if (scroll != 0) {
-                controller.changeAcceleration(scroll);
+                controller.changeThrust(scroll);
             }
 
             const movement = vk_ctx.glfw_callback.takeMovement();
@@ -229,7 +229,7 @@ fn buildPipelines(vk_ctx: *VulkanContext, slangc: []const u8, shader_folder: ?[]
 
         const spv_file = shader_dir.openFile(spv_file_name, .{}) catch |err| switch (err) {
             error.FileNotFound => blk: {
-                const compile_cwd = if (helper.is_windows) shader_folder else shader_dir;
+                const compile_cwd = if (helper.is_windows) shader_folder orelse "" else shader_dir;
                 try compileSlangShader(compile_cwd, slangc, stage, spv_file_name);
                 break :blk try shader_dir.openFile(spv_file_name, .{});
             },

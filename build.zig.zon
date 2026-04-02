@@ -1,13 +1,14 @@
 .{
-    .name = .wormhole,
+    .name = .special_relativity,
     .version = "0.0.1",
     .minimum_zig_version = "0.15.2",
-    .fingerprint = 0xd0888657d7145c9a,
+    .fingerprint = 0x266e0f4356b48fd8,
 
     .paths = .{
         "build.zig.zon",
         "build.zig",
         "src",
+        "pack-stuff",
     },
 
     .dependencies = .{
