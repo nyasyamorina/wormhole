@@ -17,7 +17,7 @@ position: float4,
 /// in global coord
 velocity: float3,
 /// in local coord
-acceleration: f32,
+thrust: f32,
 
 
 const Controller = @This();
@@ -82,13 +82,13 @@ pub const Camera = struct {
 };
 
 
-pub fn changeAcceleration(self: *Controller, scroll: f32) void {
+pub fn changeThrust(self: *Controller, scroll: f32) void {
     const scroll_scale = 0.05;
-    self.acceleration *= @exp(scroll_scale * scroll);
+    self.thrust *= @exp(scroll_scale * scroll);
 }
 
 pub fn accelerate(self: *Controller, direction: @Vector(3, i2), dt: f32) void {
-    const hyperbolic_angle = dt * self.acceleration;
+    const hyperbolic_angle = dt * self.thrust;
     const space_scale = std.math.sinh(hyperbolic_angle);
     const time_scale = std.math.cosh(hyperbolic_angle);
 
@@ -118,12 +118,12 @@ pub fn printState(self: Controller) !void {
         "time (global): {:.2} s\x1b[K\n" ++
         "position (global): ({:.2} km, {:.2} km, {:.2} km)\x1b[K\n" ++
         "speed (global): {:.2} km/s ({:.5}% c)\x1b[K\n" ++
-        "movement acceleration (local): {:.2} km/s/s\x1b[K\n"
+        "movement thrust (local): {:.2} km/s/s\x1b[K\n"
         , .{
             self.position[3],
             self.position[0] * math.light_speed, self.position[1] * math.light_speed, self.position[2] * math.light_speed,
             beta * math.light_speed, beta * 100,
-            self.acceleration * math.light_speed,
+            self.thrust * math.light_speed,
         },
     );
     try helper.stdout.interface.flush();

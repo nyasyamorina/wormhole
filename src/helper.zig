@@ -26,13 +26,15 @@ pub fn logger(comptime level: std.log.Level, comptime scope: @Type(.enum_literal
 var debug_alloc: if (is_safe_mode) std.heap.DebugAllocator(.{}) else void = if (is_safe_mode) .init else undefined;
 pub const allocator: std.mem.Allocator = if (is_safe_mode) debug_alloc.allocator() else std.heap.c_allocator;
 
-pub const cwd = std.fs.cwd();
+pub var cwd: std.fs.Dir = undefined;
 
 var stdout_buff: [512]u8 = undefined;
 var stdout_handle: std.fs.File = undefined;
 pub var stdout: std.fs.File.Writer = undefined;
 
 pub fn init() !void {
+    cwd = std.fs.cwd();
+
     stdout_handle = .stdout();
     stdout = stdout_handle.writer(&stdout_buff);
 }
