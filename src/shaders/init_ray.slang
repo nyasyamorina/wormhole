@@ -1,4 +1,4 @@
-#include <utils.slang>
+#include "utils.slang"
 
 
 struct Uniform {
