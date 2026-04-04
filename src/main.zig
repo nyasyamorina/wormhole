@@ -50,9 +50,13 @@ pub fn main() !void {
     var last_print_state_time = vk_ctx.frame_timestamp;
     helper.stdout.interface.print("\nstate:\n\n\n\n\n", .{}) catch {};
 
+    var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.5).init else void {};
+
     if (helper.is_debug) std.log.info("entering main loop...", .{});
     defer if (helper.is_debug) std.log.info("main loop exited.", .{});
     while (!vk_ctx.shouldExit()) {
+
+        if (helper.is_debug) timer.start(.loop);
         glfw.pollEvents();
 
         if (vk_ctx.shouldRecreateSwapchain()) {
@@ -63,6 +67,7 @@ pub fn main() !void {
 
         var may_resources = try vk_ctx.acquireFrame();
         if (may_resources) |*resources| {
+            if (helper.is_debug) timer.start(.frame);
             const dt: f32 = @floatCast(@as(f64, @floatFromInt(resources.prev_frame_time)) / std.time.ns_per_s);
 
             const mouse_move = vk_ctx.glfw_callback.takeMouseMove();
@@ -89,6 +94,7 @@ pub fn main() !void {
                     std.log.warn("failed to print state: {t}", .{err});
                     print_state_failed = true;
                 }
+                if (helper.is_debug) timer.report();
             }
 
             try resources.beginSettingUniforms();
@@ -100,7 +106,10 @@ pub fn main() !void {
             resources.endSettingUniforms();
 
             try resources.drawFrame(.{});
+            if (helper.is_debug) timer.stop(.frame);
         }
+
+        if (helper.is_debug) timer.stop(.loop);
     }
 }
 

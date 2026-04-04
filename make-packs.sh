@@ -12,6 +12,6 @@ zig build --release=small
 rm -f zig-out/packs/wormhole-linux-x86_64-pack.tar.xz
 tar -O -c readme.md readme.zh.md -C zig-out/bin -c wormhole -C ../shaders -c init_ray.spv render_ray.spv | xz -zc9e - > zig-out/packs/wormhole-linux-x86_64-pack.tar.xz
 
-#zig build --release=small -Dtarget=x86_64-windows # this line should be run on windows
+zig build --release=small -Dtarget=x86_64-windows # this line should be run on windows
 rm -f zig-out/packs/wormhole-windows-x86_64-pack.tar.xz
 tar -O -c readme.md readme.zh.md -C pack-stuff/windows -c glfw3.dll -C ../../zig-out/bin -c wormhole.exe -C ../shaders -c init_ray.spv render_ray.spv | xz -zc9e - > zig-out/packs/wormhole-windows-x86_64-pack.tar.xz

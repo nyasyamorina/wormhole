@@ -44,3 +44,41 @@ pub fn deinit() void {
         _ = debug_alloc.deinit();
     }
 }
+
+
+pub fn Timer(comptime tags: []const @TypeOf(.enum_literal), comptime smooth: f32) type {
+    return struct {
+        state: [tags.len]f32,
+        timestamps: [tags.len]i128,
+
+        pub const init: @This() = .{
+            .state = std.mem.zeroes([tags.len]f32),
+            .timestamps = undefined,
+        };
+
+        fn tagIndex(comptime tag: @TypeOf(.enum_literal)) usize {
+            inline for (tags, 0..) |t, idx| {
+                if (t == tag) return idx;
+            }
+            @compileError("`" ++ @tagName(tag) ++ "` is not an available tag");
+        }
+
+        pub fn start(self: *@This(), comptime tag: @TypeOf(.enum_literal)) void {
+            const idx = tagIndex(tag);
+            self.timestamps[idx] = std.time.nanoTimestamp();
+        }
+
+        pub fn stop(self: *@This(), comptime tag: @TypeOf(.enum_literal)) void {
+            const idx = tagIndex(tag);
+            const time = std.time.nanoTimestamp() - self.timestamps[idx];
+            self.state[idx] = smooth * self.state[idx] + (1 - smooth) * @as(f32, @floatFromInt(time)) / std.time.ns_per_ms;
+        }
+
+        pub fn report(self: @This()) void {
+            std.debug.print("timer report:\n", .{});
+            inline for (tags, self.state) |t, s| {
+                std.debug.print("  {s}: {:.02} ms\n", .{@tagName(t), s});
+            }
+        }
+    };
+}
