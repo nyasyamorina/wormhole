@@ -36,7 +36,7 @@ pub fn main() !void {
             .view_up = .{0, 0, 1},
             .fov_v = 60,
         }),
-        .position = .{0, 0, 0, 0},
+        .position = .{0, -15, 0, 0},
         .velocity = .{0, 0, 0},
         .thrust = 0.1,
     };
@@ -97,13 +97,11 @@ pub fn main() !void {
                 if (helper.is_debug) timer.report();
             }
 
-            try resources.beginSettingUniforms();
-            resources.uniform(.init_ray).* = .{
+            try resources.setUniform(.{
                 .camera = controller.camera.into(),
                 .position = controller.position,
                 .speed = controller.velocity,
-            };
-            resources.endSettingUniforms();
+            });
 
             try resources.drawFrame(.{});
             if (helper.is_debug) timer.stop(.frame);

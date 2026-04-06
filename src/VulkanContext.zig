@@ -13,12 +13,12 @@ pub const in_flight_count = 2;
 const Fences = [in_flight_count]vk.Fence;
 const Commands = [in_flight_count]vk.CommandBuffer;
 const Semaphores = [in_flight_count]vk.Semaphore;
-const UniformBuffers = [in_flight_count][Stage.all.len]vk.Buffer;
-const UniformOffsets = [in_flight_count][Stage.all.len]u64;
+const UniformBuffers = [in_flight_count]vk.Buffer;
+const UniformOffsets = [in_flight_count + 1]u64;
 const StorageImages = [in_flight_count][set_layout.storage_count]vk.Image;
 const StorageViews = [in_flight_count][set_layout.storage_count]vk.ImageView;
 const SetLayouts = [set_layout.layout_count]vk.DescriptorSetLayout;
-const Sets = [in_flight_count][set_layout.layout_count - 1 + Stage.all.len]vk.DescriptorSet;
+const Sets = [in_flight_count][set_layout.layout_count]vk.DescriptorSet;
 const PipelineLayouts = [Stage.all.len]vk.PipelineLayout;
 const Pipelines = [Stage.all.len]vk.Pipeline;
 
@@ -52,7 +52,6 @@ computing_semaphores: Semaphores,
 rendering_commands: Commands,
 rendering_semaphores: Semaphores,
 
-uniform_size: u64,
 uniform_memory: vk.DeviceMemory,
 uniform_buffers: UniformBuffers,
 uniform_offsets: UniformOffsets,
@@ -76,11 +75,6 @@ const log = std.log.scoped(.VulkanContext);
 
 var instance_wrapper: vk.InstanceWrapper = .{ .dispatch = .{} };
 var device_wrapper: vk.DeviceWrapper = .{ .dispatch = .{} };
-pub const uniform_sizes = blk: {
-    var sizes: [Stage.all.len]u64 = undefined;
-    for (Stage.all) |stage| sizes[@intFromEnum(stage)] = @sizeOf(stage.getComptimeNamed(shader_layout.uniforms));
-    break :blk sizes;
-};
 
 pub fn init(controller: *Controller) !VulkanContext {
     const glfw_callback = try helper.allocator.create(GlfwCallback);
@@ -137,10 +131,10 @@ pub fn init(controller: *Controller) !VulkanContext {
     errdefer for (rendering_semaphores) |s| device.destroySemaphore(s, null);
 
     const uniform_buffers = try _createUniformBuffers(device);
-    errdefer for(uniform_buffers) |b1| for (b1) |b| device.destroyBuffer(b, null);
-    const uniform_offsets, const uniform_size, const memory_type_mask = _calcuteUniformMemoryInfo(device, uniform_buffers);
+    errdefer for(uniform_buffers) |b| device.destroyBuffer(b, null);
+    const uniform_offsets, const memory_type_mask = _calcuteUniformMemoryInfo(device, uniform_buffers);
     const memory_type = try memory_type_fiinder.find(memory_type_mask, .{ .host_visible_bit = true, .host_coherent_bit = true });
-    const uniform_memory = try _allocAndBindUniformMemory(device, memory_type, uniform_buffers, uniform_offsets, uniform_size);
+    const uniform_memory = try _allocAndBindUniformMemory(device, memory_type, uniform_buffers, uniform_offsets);
     errdefer device.freeMemory(uniform_memory, null);
 
     const set_layouts = try _createSetLayouts(device);
@@ -174,7 +168,6 @@ pub fn init(controller: *Controller) !VulkanContext {
         .rendering_semaphores = rendering_semaphores,
         .rendering_commands = rendering_commands,
 
-        .uniform_size = uniform_size,
         .uniform_memory = uniform_memory,
         .uniform_buffers = uniform_buffers,
         .uniform_offsets = uniform_offsets,
@@ -209,7 +202,7 @@ pub fn deinit(self: *VulkanContext) void {
     defer for (self.rendering_semaphores) |s| self.device.destroySemaphore(s, null);
 
     defer self.device.freeMemory(self.uniform_memory, null);
-    defer for (self.uniform_buffers) |b1| for (b1) |b| self.device.destroyBuffer(b, null);
+    defer for (self.uniform_buffers) |b| self.device.destroyBuffer(b, null);
 
     defer self.device.freeMemory(self.storage_memory, null);
     defer for (self.storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
@@ -592,11 +585,11 @@ fn _createDescriptorPool(device: vk.DeviceProxy) !vk.DescriptorPool {
     const pool_sizes = [_]vk.DescriptorPoolSize {
         .{
             .type = .uniform_buffer,
-            .descriptor_count = in_flight_count * Stage.all.len,
+            .descriptor_count = in_flight_count,
         },
         .{
             .type = .storage_image,
-            .descriptor_count = in_flight_count * set_layout.storage_count + in_flight_count * 1,
+            .descriptor_count = in_flight_count * (set_layout.storage_count + 1),
         },
     };
     return device.createDescriptorPool(&.{
@@ -606,7 +599,6 @@ fn _createDescriptorPool(device: vk.DeviceProxy) !vk.DescriptorPool {
         .p_pool_sizes = &pool_sizes,
     }, null);
 }
-
 fn _createSetLayouts(device: vk.DeviceProxy) !SetLayouts {
     var layouts = std.mem.zeroes(SetLayouts);
     errdefer for (layouts) |l| device.destroyDescriptorSetLayout(l, null);
@@ -617,11 +609,10 @@ fn _createSetLayouts(device: vk.DeviceProxy) !SetLayouts {
     return layouts;
 }
 fn _createSets(device: vk.DeviceProxy, pool: vk.DescriptorPool, layouts: SetLayouts) !Sets {
-    const set_count = in_flight_count * (set_layout.layout_count - 1 + Stage.all.len);
+    const set_count = in_flight_count * (set_layout.layout_count);
 
-    var set_layouts: [in_flight_count][set_layout.layout_count - 1 + Stage.all.len]vk.DescriptorSetLayout = undefined;
-    @memset(set_layouts[0][0 .. Stage.all.len], layouts[0]); @memcpy(set_layouts[0][Stage.all.len ..], layouts[1 ..]);
-    @memset(set_layouts[1][0 .. Stage.all.len], layouts[0]); @memcpy(set_layouts[1][Stage.all.len ..], layouts[1 ..]);
+    var set_layouts: [in_flight_count]SetLayouts = undefined;
+    @memset(&set_layouts, layouts);
 
     var sets = std.mem.zeroes(Sets);
     errdefer device.freeDescriptorSets(pool, set_count, @ptrCast(&sets)) catch {};
@@ -634,30 +625,25 @@ fn _createSets(device: vk.DeviceProxy, pool: vk.DescriptorPool, layouts: SetLayo
 }
 
 fn _updateUniformDesriptor(device: vk.DeviceProxy, buffers: UniformBuffers, sets: Sets) void {
-    var infos: [in_flight_count][Stage.all.len]vk.DescriptorBufferInfo = undefined;
-    for (0 .. in_flight_count) |f| for (0 .. Stage.all.len) |s| {
-        infos[f][s] = .{
-            .buffer = buffers[f][s],
-            .offset = 0,
-            .range = vk.WHOLE_SIZE,
-        };
-    };
-
-    var writes: [in_flight_count][Stage.all.len]vk.WriteDescriptorSet = undefined;
-    for (0 .. in_flight_count) |f| for (0 .. Stage.all.len) |s| {
-        writes[f][s] = .{
+    var writes: [in_flight_count]vk.WriteDescriptorSet = undefined;
+    for (0 .. in_flight_count) |f| {
+        writes[f] = .{
             .descriptor_type = .uniform_buffer,
             .descriptor_count = 1,
-            .p_buffer_info = infos[f][s .. s+1].ptr,
-            .dst_set = sets[f][s],
+            .p_buffer_info = &.{ .{
+                .buffer = buffers[f],
+                .offset = 0,
+                .range = vk.WHOLE_SIZE,
+            } },
+            .dst_set = sets[f][0],
             .dst_binding = 0,
             .dst_array_element = 0,
             .p_image_info = undefined,
             .p_texel_buffer_view = undefined,
         };
-    };
+    }
 
-    device.updateDescriptorSets(in_flight_count * Stage.all.len, @ptrCast(&writes), 0, null);
+    device.updateDescriptorSets(writes.len, &writes, 0, null);
 }
 fn _updateStorageDescriptor(device: vk.DeviceProxy, views: StorageViews, sets: Sets) void {
     var infos: [in_flight_count][set_layout.storage_count]vk.DescriptorImageInfo = undefined;
@@ -675,7 +661,7 @@ fn _updateStorageDescriptor(device: vk.DeviceProxy, views: StorageViews, sets: S
             .descriptor_type = .storage_image,
             .descriptor_count = 1,
             .p_image_info = infos[f][im .. im+1].ptr,
-            .dst_set = sets[f][Stage.all.len],
+            .dst_set = sets[f][1],
             .dst_binding = @intCast(im),
             .dst_array_element = 0,
             .p_buffer_info = undefined,
@@ -745,43 +731,45 @@ pub const MemoryTypeFinder = struct {
 
 fn _createUniformBuffers(device: vk.DeviceProxy) !UniformBuffers {
     var buffers = std.mem.zeroes(UniformBuffers);
-    errdefer for (buffers) |b1| for (b1) |b| device.destroyBuffer(b, null);
+    errdefer for (buffers) |b| device.destroyBuffer(b, null);
 
-    for (0 .. in_flight_count) |f| for (Stage.all) |stage| {
-        buffers[f][@intFromEnum(stage)] = try device.createBuffer(&.{
+    for (0 .. in_flight_count) |f| {
+        buffers[f] = try device.createBuffer(&.{
             .sharing_mode = .exclusive,
-            .size = uniform_sizes[@intFromEnum(stage)],
+            .size = @sizeOf(shader_layout.Uniform),
             .usage = .{ .uniform_buffer_bit = true },
         }, null);
-    };
+    }
     return buffers;
 }
-fn _calcuteUniformMemoryInfo(device: vk.DeviceProxy, buffers: UniformBuffers) struct {UniformOffsets, u64, u32} {
+fn _calcuteUniformMemoryInfo(device: vk.DeviceProxy, buffers: UniformBuffers) struct {UniformOffsets, u32} {
     var offsets: UniformOffsets = undefined;
     var size: u64 = 0;
     var mask: u32 = std.math.maxInt(u32);
 
-    for (0 .. in_flight_count) |f| for (0 .. Stage.all.len) |s| {
-        const mem_req = device.getBufferMemoryRequirements(buffers[f][s]);
+    for (0 .. in_flight_count) |f| {
+        const mem_req = device.getBufferMemoryRequirements(buffers[f]);
 
         size += _aligAppendSize(size, mem_req.alignment);
-        offsets[f][s] = size;
+        offsets[f] = size;
 
         size += mem_req.size;
         mask &= mem_req.memory_type_bits;
-    };
-    return .{offsets, size, mask};
+    }
+
+    offsets[in_flight_count] = size;
+    return .{offsets, mask};
 }
-fn _allocAndBindUniformMemory(device: vk.DeviceProxy, memory_type: u5, buffers: UniformBuffers, offsets: UniformOffsets, size: u64) !vk.DeviceMemory {
+fn _allocAndBindUniformMemory(device: vk.DeviceProxy, memory_type: u5, buffers: UniformBuffers, offsets: UniformOffsets) !vk.DeviceMemory {
     const memory = try device.allocateMemory(&.{
         .memory_type_index = memory_type,
-        .allocation_size = size,
+        .allocation_size = offsets[in_flight_count],
     }, null);
     errdefer device.freeMemory(memory, null);
 
-    for (buffers, offsets) |b1, o1| for (b1, o1) |b, o| {
+    for (buffers, offsets[0 .. in_flight_count]) |b, o| {
         try device.bindBufferMemory(b, memory, o);
-    };
+    }
 
     return memory;
 }
@@ -1059,31 +1047,19 @@ pub const FrameResouces = struct {
     rendering_command: vk.CommandBuffer,
     rendering_semaphore: vk.Semaphore,
 
-    uniform_mapping: ?*anyopaque = null,
     uniform_range: [2]u64,
     uniform_memory: vk.DeviceMemory,
-    uniforms: [Stage.all.len]vk.Buffer,
-    uniform_offsets: [Stage.all.len]u64,
+    uniform_buffer: vk.Buffer,
 
-    sets: [set_layout.layout_count - 1 + Stage.all.len]vk.DescriptorSet,
+    sets: [set_layout.layout_count]vk.DescriptorSet,
     pipeline_layouts: PipelineLayouts,
     pipelines: Pipelines,
 
-    pub fn beginSettingUniforms(self: *FrameResouces) !void {
-        std.debug.assert(self.uniform_mapping == null);
-        self.uniform_mapping = try self.device.mapMemory(self.uniform_memory, self.uniform_range[0], self.uniform_range[1] - self.uniform_range[0], .{});
-    }
-
-    pub fn uniform(self: *FrameResouces, comptime stage: Stage) *stage.getComptimeNamed(shader_layout.uniforms) {
-        const offset = self.uniform_offsets[@intFromEnum(stage)];
-        const data = &@as([*]u8, @ptrCast(self.uniform_mapping.?))[offset];
-        return @ptrCast(@alignCast(data));
-    }
-
-    pub fn endSettingUniforms(self: *FrameResouces) void {
-        std.debug.assert(self.uniform_mapping != null);
+    pub fn setUniform(self: *FrameResouces, uniform: shader_layout.Uniform) !void {
+        const data = try self.device.mapMemory(self.uniform_memory, self.uniform_range[0], self.uniform_range[1] - self.uniform_range[0], .{});
+        const map: *shader_layout.Uniform = @ptrCast(@alignCast(data.?));
+        map.* = uniform;
         self.device.unmapMemory(self.uniform_memory);
-        self.uniform_mapping = null;
     }
 
     pub const DrawFrameInfo = struct {};
@@ -1104,8 +1080,8 @@ pub const FrameResouces = struct {
         try computing_command.beginCommandBuffer(&.{});
         { // init ray
             const stage = Stage.init_ray;
-            const uniform_set = self.sets[@intFromEnum(stage)];
-            const storage_set = self.sets[Stage.all.len];
+            const uniform_set = self.sets[0];
+            const storage_set = self.sets[1];
             const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
             const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
             const pipeline = self.pipelines[@intFromEnum(stage)];
@@ -1124,9 +1100,9 @@ pub const FrameResouces = struct {
         try rendering_command.beginCommandBuffer(&.{});
         { // render ray
             const stage = Stage.render_ray;
-            const uniform_set = self.sets[@intFromEnum(stage)];
-            const storage_set = self.sets[Stage.all.len];
-            const surface_set = self.sets[Stage.all.len + 1];
+            const uniform_set = self.sets[0];
+            const storage_set = self.sets[1];
+            const surface_set = self.sets[2];
             const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
             const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
             const pipeline = self.pipelines[@intFromEnum(stage)];
@@ -1259,7 +1235,6 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
 
     try self.device.resetFences(1, &.{fence});
 
-    const uniform_start = self.uniform_offsets[self.next_frame][0];
     const resources: FrameResouces = .{
         .swapchain = self.swapchain,
         .extent = self.storage_extent,
@@ -1284,14 +1259,9 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
         .rendering_command = self.rendering_commands[self.next_frame],
         .rendering_semaphore = self.rendering_semaphores[self.next_frame],
 
-        .uniform_range = .{ uniform_start, if (self.next_frame == 0) self.uniform_offsets[1][0] else self.uniform_size },
+        .uniform_range = .{self.uniform_offsets[self.next_frame], self.uniform_offsets[@as(u2, self.next_frame) + 1]},
         .uniform_memory = self.uniform_memory,
-        .uniforms = self.uniform_buffers[self.next_frame],
-        .uniform_offsets = blk: {
-            var offsets = self.uniform_offsets[self.next_frame];
-            for (&offsets) |*o| o.* -= uniform_start;
-            break :blk offsets;
-        },
+        .uniform_buffer = self.uniform_buffers[self.next_frame],
 
         .sets = self.sets[self.next_frame],
         .pipeline_layouts = self.pipeline_layouts,

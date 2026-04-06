@@ -1,14 +1,6 @@
 #include "utils.slang"
 
 
-struct Uniform {
-    /// in local coord
-    Camera camera;
-    /// in global coord
-    float4 position;
-    /// in global coord
-    float3 velocity;
-};
 [vk_binding(0, 0)]
 ConstantBuffer<Uniform> uniform;
 

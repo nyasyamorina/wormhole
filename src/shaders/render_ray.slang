@@ -1,9 +1,6 @@
 #include "utils.slang"
 
 
-struct Uniform {
-    float _placeholder;
-};
 [vk_binding(0, 0)]
 ConstantBuffer<Uniform> uniform;
 

@@ -10,6 +10,17 @@ struct Camera {
     float3 v;
 };
 
+struct Uniform {
+    /// in global coord
+    float4 position;
+    /// in global coord
+    float3 velocity;
+
+    Camera camera;
+};
+
+
+
 static const float pi = 3.14159265358979323846264338327950288419716939937510;
 
 
