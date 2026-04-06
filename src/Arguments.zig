@@ -5,6 +5,8 @@ const helper = @import("helper.zig");
 
 slangc: Option(String, "slangc", null, "slangc"),
 shader_folder: Option(String, null, 's', "shader"),
+iter_per_call: Option(u32, 100, 'i', "iter-pre-call"),
+n_iter_calls: Option(usize, 10, 'n', "n-iter-calls"),
 
 
 const Arguments = @This();
@@ -17,7 +19,7 @@ comptime {
             }
             if (o1.type.short_arg) |s1| {
                 if (o2.type.short_arg) |s2| {
-                    if (s1 == s2) {
+                    if (std.mem.eql(u8, s1, s2)) {
                         @compileError("short name collision: " ++ s1);
                     }
                 }
@@ -131,12 +133,12 @@ pub fn Option(comptime T: type, comptime default: ?T, comptime short: ?u8, compt
                     @tagName(@typeInfo(T).int.signedness) ++ std.fmt.comptimePrint(" {d}-bit integer", .{@typeInfo(T).int.bits})
                 );
             } else if (@typeInfo(T) == .float) {
-                self.value = std.fmt.parseFloat(T, value_str) catch return unexpectedValue(arg, "number");
+                self.value = std.fmt.parseFloat(T, value_str) catch return unexpectedValue(arg, "real number");
             } else comptime unreachable;
         }
 
         fn unexpectedValue(arg: []const u8, expect: []const u8) !void {
-            log.err("got unexpected value for {s}, expect {}", .{arg, expect});
+            log.err("got unexpected value for {s}, expect a {s}", .{arg, expect});
             return error.UnexpectedValue;
         }
     };

@@ -4,6 +4,7 @@ const vk = @import("vulkan-zig");
 
 pub const Stage = enum {
     init_ray,
+    iter_ray,
     render_ray,
 
     pub const all = std.meta.tags(Stage);
@@ -37,10 +38,6 @@ pub const Stage = enum {
     }
 };
 
-pub const Partical = extern struct {
-    position: [4]f32,
-    direction: [4]f32,
-};
 
 pub const Camera = extern struct {
     /// normalized
@@ -53,6 +50,7 @@ pub const Uniform = extern struct {
         position: [4]f32 align(16),
         speed: [3]f32 align(16),
         camera: Camera,
+        iter_per_call: u32,
 };
 
 pub const set_layout = struct {
@@ -102,5 +100,6 @@ pub const set_layout = struct {
 
 pub const pipeline_set_layout_indices = struct {
     pub const init_ray: []const usize = &.{0, 1};
+    pub const iter_ray: []const usize = &.{0, 1};
     pub const render_ray: []const usize = &.{0, 1, 2};
 };

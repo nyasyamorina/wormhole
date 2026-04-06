@@ -1062,7 +1062,9 @@ pub const FrameResouces = struct {
         self.device.unmapMemory(self.uniform_memory);
     }
 
-    pub const DrawFrameInfo = struct {};
+    pub const DrawFrameInfo = struct {
+        n_iter_call: usize,
+    };
 
     pub fn drawFrame(self: FrameResouces, info: DrawFrameInfo) !void {
         _updateSurfaceDescriptor(self.device, self.swapchain_view, self.sets[self.sets.len - 1]);
@@ -1093,6 +1095,22 @@ pub const FrameResouces = struct {
                 0, null,
             );
             computing_command.dispatch(group_x, group_y, 1);
+        }
+        { // iter ray
+            const stage = Stage.iter_ray;
+            const uniform_set = self.sets[0];
+            const storage_set = self.sets[1];
+            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
+            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
+            const pipeline = self.pipelines[@intFromEnum(stage)];
+
+            computing_command.bindPipeline(.compute, pipeline);
+            computing_command.bindDescriptorSets(
+                .compute, pipeline_layout,
+                0, set_count, &.{uniform_set, storage_set},
+                0, null,
+            );
+            for (0 .. info.n_iter_call) |_| computing_command.dispatch(group_x, group_y, 1);
         }
         try computing_command.endCommandBuffer();
 

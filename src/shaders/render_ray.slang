@@ -5,10 +5,10 @@
 ConstantBuffer<Uniform> uniform;
 
 [vk_binding(0, 1)]
-RWTexture2D<float4> ray_position_tex;
+RWTexture2D<float4, 1> ray_tex;
 
 [vk_binding(1, 1)]
-RWTexture2D<float4> ray_direction_tex;
+RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_compression_tex;
 
 [vk_binding(2, 1)]
 RWTexture2D<float4> _unused_3;
@@ -26,16 +26,24 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     surface.GetDimensions(extent.x, extent.y);
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
-    float4 ray = ray_direction_tex.Load(thread_id.xy);
+    float4 ray_polar = ray_tex.Load(thread_id.xy);
+    float4 ray_plane_y_axis_and_ray_compression = ray_plane_y_axis_and_ray_compression_tex.Load(thread_id.xy);
+
+    // convert ray from 2-D polar coordinate to 3-D Cartesian coordinate
+    float3 x_axis = normalize(uniform.position.xyz);
+    float3 y_axis = ray_plane_y_axis_and_ray_compression.xyz;
+    float2[2] ray_2d = polar.toCartesian(ray_polar.xy, ray_polar.zw);
+    float3 ray_position  = ray_2d[0].x * x_axis + ray_2d[0].y * y_axis;
+    float3 ray_space = normalize(ray_2d[1].x * x_axis + ray_2d[1].y * y_axis);
 
     // note that the Doppler effect in relativity is purely cause by coordinate transformation,
     // because `ray` has 0 space-time length, `k * ray` also has 0 space-time length, where `k` is any real number,
     // although `k * any` is a valid ray, and has the same direction as `ray`, but its time component is changed,
     // and that is what cause the wavelength of light changed.
     // because we are sending light "back in time", the time component is negative.
-    float freq_scale = -1.0 / ray.w;
+    float freq_scale = ray_plane_y_axis_and_ray_compression.w;
 
-    float3 ray_space = normalize(ray.xyz);
+
     float3 color = 0.0;
 
     // starfield

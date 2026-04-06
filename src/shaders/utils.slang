@@ -1,8 +1,3 @@
-struct Partical {
-    float4 position;
-    float4 direction;
-};
-
 struct Camera {
     /// normalized
     float3 direction;
@@ -17,6 +12,8 @@ struct Uniform {
     float3 velocity;
 
     Camera camera;
+
+    uint iter_per_call;
 };
 
 
@@ -266,4 +263,28 @@ namespace cie {
     static const float table_wave_length_begin = 380.0;
     static const float table_wave_length_end = 710.0;
     static const float table_wave_length_step = 10.0;
+}
+
+
+/// 2-D polar coordinate
+namespace polar {
+    float2 fromCartesian(float2 p) {
+        return {length(p), atan2(p.y, p.x)};
+    }
+    float2[2] fromCartesian(float2 p, float2 d) {
+        float2 pp = fromCartesian(p);
+        float dr = dot(d, p) / pp[0];
+        float da = dot(d, float2(-p.y, p.x)) / sqr(pp[0]);
+        return {pp, {dr, da}};
+    }
+
+    float2 toCartesian(float2 p) {
+        return p[0] * float2(cos(p[1]), sin(p[1]));
+    }
+    float2[2] toCartesian(float2 p, float2 d) {
+        float2 pc = toCartesian(p);
+        float dx = dot(d, float2(cos(p[1]), -pc.y));
+        float dy = dot(d, float2(sin(p[1]),  pc.x));
+        return {pc, {dx, dy}};
+    }
 }

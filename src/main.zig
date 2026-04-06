@@ -50,7 +50,7 @@ pub fn main() !void {
     var last_print_state_time = vk_ctx.frame_timestamp;
     helper.stdout.interface.print("\nstate:\n\n\n\n\n", .{}) catch {};
 
-    var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.5).init else void {};
+    var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.87).init else void {};
 
     if (helper.is_debug) std.log.info("entering main loop...", .{});
     defer if (helper.is_debug) std.log.info("main loop exited.", .{});
@@ -101,9 +101,12 @@ pub fn main() !void {
                 .camera = controller.camera.into(),
                 .position = controller.position,
                 .speed = controller.velocity,
+                .iter_per_call = args.iter_per_call.value,
             });
 
-            try resources.drawFrame(.{});
+            try resources.drawFrame(.{
+                .n_iter_call = args.n_iter_calls.value,
+            });
             if (helper.is_debug) timer.stop(.frame);
         }
 
@@ -114,6 +117,7 @@ pub fn main() !void {
 const base_shaders = struct {
     pub const utils: []const u8 = @embedFile("utils.slang.xz");
     pub const init_ray: []const u8 = @embedFile("init_ray.slang.xz");
+    pub const iter_ray: []const u8 = @embedFile("iter_ray.slang.xz");
     pub const render_ray: []const u8 = @embedFile("render_ray.slang.xz");
 };
 
