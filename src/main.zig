@@ -32,11 +32,11 @@ pub fn main() !void {
 
     var controller: Controller = .{
         .camera = .init(.{
-            .direction = .{0, 1, 0},
+            .direction = .{0, -1, 0},
             .view_up = .{0, 0, 1},
             .fov_v = args.fov_y.value,
         }),
-        .position = .{0, -0.99 * math.schwarzschild.radius, 0, 0},
+        .position = .{0, 1.001 * math.schwarzschild.radius, 0, 0},
         .velocity = .{0, 0, 0},
         .thrust = 0.1,
     };
@@ -48,7 +48,7 @@ pub fn main() !void {
 
     var print_state_failed = false;
     var last_print_state_time = vk_ctx.frame_timestamp;
-    helper.stdout.interface.print("\nstate:\n\n\n\n\n", .{}) catch {};
+    helper.stdout.interface.print("\nstate:\n\x1b[s", .{}) catch {};
 
     var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.87).init else void {};
 

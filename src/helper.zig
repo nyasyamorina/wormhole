@@ -77,7 +77,7 @@ pub fn Timer(comptime tags: []const @TypeOf(.enum_literal), comptime smooth: f32
         pub fn report(self: @This()) void {
             std.debug.print("timer report:\n", .{});
             inline for (tags, self.state) |t, s| {
-                std.debug.print("  {s}: {:.02} ms\n", .{@tagName(t), s});
+                std.debug.print("  {s}: {:.02} ms\x1b[K\n", .{@tagName(t), s});
             }
         }
     };

@@ -114,7 +114,7 @@ pub fn printState(self: Controller) !void {
     const beta = @sqrt(t / (1 + t));
 
     try helper.stdout.interface.print(
-        "\r\x1b[4A" ++
+        "\x1b[u" ++
         "time (global): {:.2} s\x1b[K\n" ++
         "position (global): ({:.2} km, {:.2} km, {:.2} km)\x1b[K\n" ++
         "speed (global): {:.2} km/s ({:.5}% c)\x1b[K\n" ++
