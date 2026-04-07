@@ -11,7 +11,7 @@ RWTexture2D<float4, 1> ray_tex;
 RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_compression_tex;
 
 [vk_binding(2, 1)]
-RWTexture2D<float4> _unused_3;
+RWTexture2D<float4> ray_tag_tex;
 
 [vk_binding(3, 1)]
 RWTexture2D<float4> _unused_4;
@@ -25,6 +25,8 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     uint2 extent;
     surface.GetDimensions(extent.x, extent.y);
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
+
+    RayTag ray_tag = bit_cast<RayTag>(ray_tag_tex.Load(thread_id.xy)[0]);
 
     float4 ray_polar = ray_tex.Load(thread_id.xy);
     float4 ray_plane_y_axis_and_ray_compression = ray_plane_y_axis_and_ray_compression_tex.Load(thread_id.xy);
@@ -41,23 +43,19 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     // although `k * any` is a valid ray, and has the same direction as `ray`, but its time component is changed,
     // and that is what cause the wavelength of light changed.
     // because we are sending light "back in time", the time component is negative.
-    float freq_scale = ray_plane_y_axis_and_ray_compression.w;
+    float freq_scale = 1.0;// ray_plane_y_axis_and_ray_compression.w;
 
+    float3 color;
 
-    float3 color = 0.0;
-
-    // starfield
-    float starfield_bright = starfieldBright(ray_space);
-    float starfield_temp = starfieldTemp(ray_space);
-    color += renderBlackBody(starfield_bright, starfield_temp, freq_scale);
-
-    // nebulae
-    float nebulae_bright = nebulaeBright(ray_space);
-    float nebulae_temp = nebulaeTemp(ray_space);
-    color += renderBlackBody(nebulae_bright, nebulae_temp, freq_scale);
-
-    // tone mapping
-    color = acesToneMap(color);
+    if (ray_tag == RayTag::NotExist || ray_tag == RayTag::Catptured) {
+        color = 0.0;
+    } else if (ray_tag == RayTag::Invalid) {
+        color = {1.0, 0.0, 0.0};
+    } else if (ray_polar.x <= 10.0 * schwarzschild::radius) {
+        color = {0.0, 0.0, 0.5};
+    } else {
+        color = renderCelestialSphere(ray_space, freq_scale);
+    }
 
     // crosshair
     color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
@@ -149,4 +147,22 @@ float3 renderBlackBody(float bright, float temp, float freq_scale) {
     //float abs_bright = bright_norm * bb_bright * bright;
     float abs_bright = bright_norm * bright;
     return abs_bright * bb_color;
+}
+
+/// `direction`: normalized
+float3 renderCelestialSphere(float3 direction, float freq_scale) {
+    float3 color = 0.0;
+
+    // starfield
+    float starfield_bright = starfieldBright(direction);
+    float starfield_temp = starfieldTemp(direction);
+    color += renderBlackBody(starfield_bright, starfield_temp, freq_scale);
+
+    // nebulae
+    float nebulae_bright = nebulaeBright(direction);
+    float nebulae_temp = nebulaeTemp(direction);
+    color += renderBlackBody(nebulae_bright, nebulae_temp, freq_scale);
+
+    // tone mapping
+    return acesToneMap(color);
 }

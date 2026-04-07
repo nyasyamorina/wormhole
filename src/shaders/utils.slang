@@ -288,3 +288,77 @@ namespace polar {
         return {pc, {dx, dy}};
     }
 }
+
+
+/// in 2-D space Eddington–Finkelstein coordinates
+///
+/// note that the `t` component in Eddington–Finkelstein coordinates is not "time",
+/// the actual coordinate time is `t + _signChanger(schwarzschild::radius * ln(abs(r / schwarzschild::radius - 1)))`
+namespace schwarzschild {
+    /// unit: light-second
+    static const float radius = 1.0;
+
+    /// dot product (inner product)
+    float inner(float r, float3 u, float3 v) {
+        float tmp = schwarzschild::radius / r;
+        float flat_time = u[2]*v[2];
+        float flat_space = u[0]*v[0] + sqr(r) * u[1]*v[1];
+        float cross_term = (u[2] + _signChanger(u[0])) * (v[2] + _signChanger(v[0]));
+        return flat_time - flat_space - tmp * cross_term;
+    }
+
+    Optional<float> nullBackwardTime(float r, float2 polar) {
+        float tmp = schwarzschild::radius / r;
+        float delta = sqr(polar[0]) + r * (r - schwarzschild::radius) * sqr(polar[1]);
+        if (delta < 0.0) return none;
+        float tmp1 = _signChanger(tmp * polar[0]);
+        float tmp2 = 1.0 - tmp;
+        return (tmp1 - sqrt(delta)) / tmp2;
+    }
+
+    /// the delta of the component value in transpoting `v` along `d` while maintaining `v` parallel.
+    ///
+    /// this is a variant of the geodesics equation.
+    float3 deltaParallelTransport(float r, float3 d, float3 v) {
+        float inv_r = 1.0 / r;
+        float r_11 = schwarzschild::radius * inv_r;
+        float r_12 = schwarzschild::radius * sqr(inv_r);
+        float r_23 = sqr(schwarzschild::radius) * cub(inv_r);
+        // the Christoffel symbols
+        float C_t_tt = _signChanger(0.5 * r_23);
+        float C_t_tr = 0.5 * (r_23 + r_12);
+        float C_t_rr = _signChanger(0.5 * r_23 + r_12);
+        float C_t_aa = _signChanger(-schwarzschild::radius);
+        float C_r_tt = 0.5 * (r_12 - r_23);
+        float C_r_tr = _signChanger(-0.5 * r_23);
+        float C_r_rr = -0.5 * (r_23 + r_12);
+        float C_r_aa = schwarzschild::radius - r;
+        float C_a_ra = inv_r;
+
+        return -float3(
+            C_r_tt * (d[2]*v[2]) + C_r_tr * (d[2]*v[0] + d[0]*v[2]) + C_r_rr * (d[0]*v[0]) + C_r_aa * (d[1]*v[1]),
+            C_a_ra * (d[0]*v[1] + d[1]*v[0]),
+            C_t_tt * (d[2]*v[2]) + C_t_tr * (d[2]*v[0] + d[0]*v[2]) + C_t_rr * (d[0]*v[0]) + C_t_aa * (d[1]*v[1]),
+        );
+    }
+
+    [ForceInline]
+    float _signChanger(float x) {
+        return  x; // black hole
+        //return -x; // white hole
+    }
+}
+
+
+enum class RayTag: uint {
+    None = 0,
+    /// indicate the ray does not exist
+    NotExist,
+    /// indicate the ray is escape the simulation region, stop the simulation to save performance.
+    Escaped,
+    /// indicate the ray is catptured by the black hole and never escaped, stop the simulation to save performance.
+    Catptured,
+    /// indicate the ray may get into invalid state due to finite simulation precision,
+    /// such as get into black hole from outside.
+    Invalid,
+};

@@ -11,7 +11,7 @@ RWTexture2D<float4, 1> ray_tex;
 RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_compression_tex;
 
 [vk_binding(2, 1)]
-RWTexture2D<float4, 1> _unused_3;
+RWTexture2D<float4, 1> ray_tag_tex;
 
 [vk_binding(3, 1)]
 RWTexture2D<float4, 1> _unused_4;
@@ -37,6 +37,12 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     float2 position_2d = {length(uniform.position.xyz), 0.0};
     float2[2] ray_polar = polar.fromCartesian(position_2d, ray_2d);
 
+    Optional<float> dt = schwarzschild::nullBackwardTime(ray_polar[0][0], ray_polar[1]);
+    RayTag tag = (dt == none) ? RayTag::NotExist : RayTag::None;
+    float ray_compression = (dt == none) ? 0.0 : (-1.0 / dt.value);
+    if (dt != none) ray_polar[1] *= ray_compression;
+
     ray_tex.Store(thread_id.xy, float4(ray_polar[0], ray_polar[1]));
-    ray_plane_y_axis_and_ray_compression_tex.Store(thread_id.xy, float4(y_axis, -ray.w));
+    ray_plane_y_axis_and_ray_compression_tex.Store(thread_id.xy, float4(y_axis, ray_compression));
+    ray_tag_tex.Store(thread_id.xy, float4(bit_cast<float>(tag), 0.0, 0.0, 0.0));
 }
