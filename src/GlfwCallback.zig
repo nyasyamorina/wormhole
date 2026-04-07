@@ -19,6 +19,8 @@ press_d: bool = false,
 press_ctrl: bool = false,
 press_space: bool = false,
 
+q_pressed: bool = false,
+
 scroll_y: f64 = 0,
 
 
@@ -47,6 +49,7 @@ pub fn mouseMoveCB(window: *glfw.Window, pos_x: f64, pos_y: f64) callconv(.c) vo
 pub fn keyCB(window: *glfw.Window, key: glfw.Key, scan_code: c_int, action: glfw.ActionPadded, mods: glfw.Modifier) callconv(.c) void {
     const self = getSelf(window);
     switch (key) {
+        .Q => self.q_pressed = action.action == .release,
         .W => self.press_w = action.action != .release,
         .A => self.press_a = action.action != .release,
         .S => self.press_s = action.action != .release,

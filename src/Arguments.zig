@@ -5,8 +5,9 @@ const helper = @import("helper.zig");
 
 slangc: Option(String, "slangc", null, "slangc"),
 shader_folder: Option(String, null, 's', "shader"),
-iter_per_call: Option(u32, 100, 'i', "iter-pre-call"),
-n_iter_calls: Option(usize, 10, 'n', "n-iter-calls"),
+iter_per_call: Option(u32, 500, 'i', "iter-pre-call"),
+n_iter_calls: Option(usize, 1, 'n', "n-iter-calls"),
+fov_y: Option(f32, 60, 'f', "fov"),
 
 
 const Arguments = @This();

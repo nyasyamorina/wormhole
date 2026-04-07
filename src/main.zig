@@ -34,9 +34,9 @@ pub fn main() !void {
         .camera = .init(.{
             .direction = .{0, 1, 0},
             .view_up = .{0, 0, 1},
-            .fov_v = 60,
+            .fov_v = args.fov_y.value,
         }),
-        .position = .{0, -15, 0, 0},
+        .position = .{0, -0.99 * math.schwarzschild.radius, 0, 0},
         .velocity = .{0, 0, 0},
         .thrust = 0.1,
     };
@@ -59,6 +59,8 @@ pub fn main() !void {
         if (helper.is_debug) timer.start(.loop);
         glfw.pollEvents();
 
+        if (vk_ctx.glfw_callback.q_pressed) vk_ctx.window.setShouldClose(true);
+
         if (vk_ctx.shouldRecreateSwapchain()) {
             if (helper.is_debug) std.log.info("recreating swapchain...", .{});
             try vk_ctx.recreateSwapchain();
@@ -72,7 +74,7 @@ pub fn main() !void {
 
             const mouse_move = vk_ctx.glfw_callback.takeMouseMove();
             if (mouse_move[0] != 0 or mouse_move[1] != 0) {
-                controller.camera.rotate(mouse_move, 0.002);
+                controller.camera.rotate(mouse_move, 0.003);
             }
 
             const scroll = vk_ctx.glfw_callback.takeScroll();

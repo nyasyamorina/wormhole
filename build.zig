@@ -70,5 +70,4 @@ fn addCompressedShaders(b: *std.Build, module: *std.Build.Module) !void {
             module.addAnonymousImport(output_name, .{ .root_source_file = xz.captureStdOut() });
         }
     }
-
 }

@@ -12,9 +12,9 @@ const float4 = @Vector(4, f32);
 
 /// in local coord
 camera: Camera,
-/// in global coord
+/// in global coord (x,y,z,t)
 position: float4,
-/// in global coord
+/// in global coord (x,y,z)
 velocity: float3,
 /// in local coord
 thrust: f32,
@@ -64,7 +64,7 @@ pub const Camera = struct {
         const move_direction = splat(3, move[0]) * self.u - splat(3, move[1]) * self.v;
 
         const rotate_vector = math.cross(move_direction, self.d);
-        const rotate_angle = speed * math.length(rotate_vector);
+        const rotate_angle = speed * self.scale_v * math.length(rotate_vector);
         const rotate_axis = math.normalize(rotate_vector);
 
         self.d = math.rotate3d(self.d, rotate_axis, rotate_angle);
