@@ -55,6 +55,8 @@ pub fn main() !void {
     var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.87).init else void {};
     var main_loop_timestamp: i128 = std.time.nanoTimestamp();
 
+    var normalize_timestamp = main_loop_timestamp;
+
     var print_state_failed = false;
     var last_print_state_timestampp = main_loop_timestamp;
     helper.stdout.interface.print("\nstate:\n\x1b[s", .{}) catch {};
@@ -92,6 +94,11 @@ pub fn main() !void {
             controller.accelerate(movement, time_step);
         }
         controller.step(time_step);
+
+        if (main_loop_timestamp - normalize_timestamp >= 10 * std.time.ns_per_s) {
+            controller.space_time_frame.normalizeAxes();
+            normalize_timestamp = main_loop_timestamp;
+        }
 
         if (!print_state_failed and main_loop_timestamp - last_print_state_timestampp >= std.time.ns_per_s / 2) {
             if (printStateTick(controller, timer)) {
@@ -288,6 +295,6 @@ fn buildPipelines(vk_ctx: *VulkanContext, slangc: []const u8, shader_folder: ?[]
 fn printStateTick(controller: Controller, timer: anytype) !void {
     try helper.stdout.interface.print("\x1b[u", .{});
     try controller.printState();
-    if (helper.is_debug) timer.report();
+    if (helper.is_debug) try timer.report();
     try helper.stdout.interface.flush();
 }

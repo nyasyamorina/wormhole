@@ -999,7 +999,7 @@ pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
     self.swapchain = swapchain;
 
     if (helper.is_debug) timer.stop(.total);
-    if (helper.is_debug) timer.report();
+    if (helper.is_debug) timer.report() catch {};
     log.debug("swapchain recreated", .{});
 }
 

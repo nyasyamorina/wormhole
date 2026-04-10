@@ -81,15 +81,8 @@ pub fn Option(comptime T: type, comptime default: ?T, comptime short: ?u8, compt
             return .not_matched;
         }
 
-        pub fn load(self: *@This(), matched: MatchResult, arg: []const u8) !void {
-            if (self.matched) {
-                const argarg = comptime if (short_arg) |s| s ++ " | " ++ long_arg else long_arg;
-                log.err("option matched multiple times: {s}", .{argarg});
-                return error.MatchedMultipleTimes;
-            }
-            self.matched  = true;
-
-            const prefix = switch (matched) {
+        fn _argPrefix(matched: MatchResult) []const u8 {
+            return switch (matched) {
                 .not_matched => unreachable,
                 .short => blk: {
                     std.debug.assert(short != null);
@@ -97,15 +90,9 @@ pub fn Option(comptime T: type, comptime default: ?T, comptime short: ?u8, compt
                 },
                 .long => long_arg,
             };
-            if (arg.len <= prefix.len) {
-                if (T == bool) {
-                    self.value = true;
-                    return;
-                } else {
-                    log.err("missing value for: {s}", .{arg});
-                    return error.MissingValue;
-                }
-            }
+        }
+        fn _loadValueString(prefix: []const u8, arg: []const u8) ?[]const u8 {
+            if (arg.len <= prefix.len) return null;
 
             std.debug.assert(arg[prefix.len] == '=');
             var value_str = arg[prefix.len+1 ..];
@@ -115,35 +102,63 @@ pub fn Option(comptime T: type, comptime default: ?T, comptime short: ?u8, compt
                     value_str = value_str[1 .. value_str.len-1];
                 }
             }
+            return value_str;
+        }
+        fn _parseValueString(arg_prefix: []const u8, value_str: []const u8) !T {
+            if (T == String) {
+                return helper.allocator.dupeZ(u8, value_str);
+            } else if (T == bool) {
+                if (std.mem.eql(u8, value_str, "true")) {
+                    return true;
+                } else if (std.mem.eql(u8, value_str, "false")) {
+                    return false;
+                } else {
+                    _logUnexpectedValue(arg_prefix, "false|true");
+                    return error.UnexpectedValue;
+                }
+            } else if (@typeInfo(T) == .int) {
+                return std.fmt.parseInt(T, value_str, 0) catch {
+                    _logUnexpectedValue(arg_prefix, std.fmt.comptimePrint("{t} {d}-bit integer", .{@typeInfo(T).int.signedness, @typeInfo(T).int.bits}));
+                    return error.UnexpectedValue;
+                };
+            } else if (@typeInfo(T) == .float) {
+                return std.fmt.parseFloat(T, value_str) catch {
+                    _logUnexpectedValue(arg_prefix, "real number");
+                    return error.UnexpectedValue;
+                };
+            } else comptime unreachable;
+        }
+        fn _logUnexpectedValue(arg_prefix: []const u8, expect: []const u8) void {
+            log.err("got unexpected value for `{s}`, expect a {s}", .{arg_prefix, expect});
+        }
+        pub fn load(self: *@This(), matched: MatchResult, arg: []const u8) !void {
+            if (self.matched) {
+                const argarg = comptime if (short_arg) |s| s ++ " | " ++ long_arg else long_arg;
+                log.err("argument matched multiple times: {s}", .{argarg});
+                return error.ArgumentMatchedMultipleTimes;
+            }
+            self.matched  = true;
+
+            const arg_prefix = _argPrefix(matched);
+
+            const old = self.value;
+            if (_loadValueString(arg_prefix, arg)) |value_str| {
+                self.value = try _parseValueString(arg_prefix, value_str);
+            } else if (T == bool) {
+                self.value = true;
+                return;
+            } else {
+                log.err("missing value for: {s}", .{arg});
+                return error.MissingValue;
+            }
 
             if (T == String) {
-                const old = self.value;
-                self.value = try helper.allocator.dupeZ(u8, value_str);
                 if (comptime default != null) {
                     helper.allocator.free(old);
                 } else {
                     if (old) |o| helper.allocator.free(o);
                 }
-            } else if (T == bool) {
-                if (std.mem.eql(u8, value_str, "true")) {
-                    self.value = true;
-                } else if (std.mem.eql(u8, value_str, "false")) {
-                    self.value = false;
-                } else {
-                    return unexpectedValue(arg, "false|true");
-                }
-            } else if (@typeInfo(T) == .int) {
-                self.value = std.fmt.parseInt(T, value_str, 0) catch return unexpectedValue(arg,
-                    @tagName(@typeInfo(T).int.signedness) ++ std.fmt.comptimePrint(" {d}-bit integer", .{@typeInfo(T).int.bits})
-                );
-            } else if (@typeInfo(T) == .float) {
-                self.value = std.fmt.parseFloat(T, value_str) catch return unexpectedValue(arg, "real number");
-            } else comptime unreachable;
-        }
-
-        fn unexpectedValue(arg: []const u8, expect: []const u8) !void {
-            log.err("got unexpected value for {s}, expect a {s}", .{arg, expect});
-            return error.UnexpectedValue;
+            }
         }
     };
 }

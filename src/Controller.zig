@@ -129,7 +129,7 @@ pub fn changeThrust(self: *Controller, scroll: f32) void {
 
 pub fn accelerate(self: *Controller, direction: [3]i2, time_step: f32) void {
     const d: v3f32 = .{@floatFromInt(direction[0]), @floatFromInt(direction[1]), @floatFromInt(direction[2])};
-    self.space_time_frame.accelerate(svm(time_step * self.thrust, normalize(d)));
+    self.space_time_frame.accelerate(svm(std.math.sinh(time_step * self.thrust), normalize(d)));
 }
 
 pub fn step(self: *Controller, time_step: f32) void {
@@ -141,8 +141,9 @@ pub fn printState(self: Controller) !void {
     const i: math.schwarzschild.InnerAt = .{ .position = self.space_time_frame.position };
 
     try helper.stdout.interface.print(
-           "frame:" ++ helper.line_break
-        ++ "  p: {any}" ++ helper.clear_line_and_break
+           "position:" ++ helper.line_break
+        ++ "  {any} ({}x schwarzschild radius)" ++ helper.clear_line_and_break
+        ++ "frame:" ++ helper.line_break
         ++ "  x: {any}" ++ helper.clear_line_and_break
         ++ "  y: {any}" ++ helper.clear_line_and_break
         ++ "  z: {any}" ++ helper.clear_line_and_break
@@ -159,7 +160,7 @@ pub fn printState(self: Controller) !void {
         ++ "  xz: {}" ++ helper.clear_line_and_break
         ++ "  yz: {}" ++ helper.clear_line_and_break
         , .{
-            self.space_time_frame.position,
+            self.space_time_frame.position, length(math.spacial(self.space_time_frame.position)) / math.schwarzschild.radius,
             self.space_time_frame.axis_x,
             self.space_time_frame.axis_y,
             self.space_time_frame.axis_z,

@@ -77,10 +77,10 @@ pub fn Timer(comptime tags: []const @TypeOf(.enum_literal), comptime smooth: f32
             self.state[idx] = smooth * self.state[idx] + (1 - smooth) * @as(f32, @floatFromInt(time)) / std.time.ns_per_ms;
         }
 
-        pub fn report(self: @This()) void {
-            std.debug.print("timer report:\n", .{});
+        pub fn report(self: @This()) !void {
+            try stdout.interface.print("timer report:\n", .{});
             inline for (tags, self.state) |t, s| {
-                std.debug.print("  {s}: {:.02} ms" ++ clear_line_and_break, .{@tagName(t), s});
+                try stdout.interface.print("  {s}: {:.02} ms" ++ clear_line_and_break, .{@tagName(t), s});
             }
         }
     };
