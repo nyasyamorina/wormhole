@@ -5,9 +5,8 @@ const glfw = @import("glfw");
 const helper = @import("helper.zig");
 
 
-frame_resize: bool = false,
-frame_width: c_int = undefined,
-frame_height: c_int = undefined,
+frame_width: c_int,
+frame_height: c_int,
 
 mouse_move_x: f64 = 0,
 mouse_move_y: f64 = 0,
@@ -36,7 +35,6 @@ pub fn setCallbacks(self: *GlfwCallback, window: *glfw.Window) void {
 
 pub fn resizeCB(window: *glfw.Window, width: c_int, height: c_int) callconv(.c) void {
     const self = getSelf(window);
-    self.frame_resize = true;
     self.frame_width = width;
     self.frame_height = height;
 }
@@ -72,19 +70,20 @@ fn getSelf(window: *glfw.Window) *GlfwCallback {
 }
 
 pub fn takeResizeInfo(self: *GlfwCallback) ?vk.Extent2D {
-    if (!self.frame_resize) return null;
-    self.frame_resize = false;
-    return .{
-        .width = @intCast(self.frame_width),
-        .height = @intCast(self.frame_height),
-    };
+    if (self.frame_width == 0 or self.frame_height == 0) return null;
+
+    const res: vk.Extent2D = .{ .width = @intCast(self.frame_width), .height = @intCast(self.frame_height) };
+    self.frame_width = 0; self.frame_height = 0;
+    return res;
 }
-pub fn takeMouseMove(self: *GlfwCallback) [2]f32 {
-    const move: [2]f32 = .{@floatCast(self.mouse_move_x), @floatCast(self.mouse_move_y)};
-    self.mouse_move_x -= move[0]; self.mouse_move_y -= move[1];
-    return move;
+pub fn takeMouseMove(self: *GlfwCallback) ?[2]f32 {
+    if (self.mouse_move_x == 0 and self.mouse_move_y == 0) return null;
+
+    const res: [2]f32 = .{@floatCast(self.mouse_move_x), @floatCast(self.mouse_move_y)};
+    self.mouse_move_x = 0; self.mouse_move_y = 0;
+    return res;
 }
-pub fn takeMovement(self: GlfwCallback) [3]i2 {
+pub fn takeMovement(self: GlfwCallback) ?[3]i2 {
     var direction: [3]i2 = .{0, 0, 0};
 
     direction[0] += @intFromBool(self.press_d);
@@ -96,10 +95,13 @@ pub fn takeMovement(self: GlfwCallback) [3]i2 {
     direction[2] += @intFromBool(self.press_space);
     direction[2] -= @intFromBool(self.press_ctrl);
 
+    if (direction[0] == 0 and direction[1] == 0 and direction[2] == 0) return null;
     return direction;
 }
-pub fn takeScroll(self: *GlfwCallback) f32 {
-    const scroll: f32 = @floatCast(self.scroll_y);
-    self.scroll_y -= scroll;
-    return scroll;
+pub fn takeScroll(self: *GlfwCallback) ?f32 {
+    if (self.scroll_y == 0) return null;
+
+    const res: f32 = @floatCast(self.scroll_y);
+    self.scroll_y = 0;
+    return res;
 }

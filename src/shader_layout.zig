@@ -46,6 +46,14 @@ pub const Camera = extern struct {
     v: [3]f32 align(16),
 };
 
+pub const SpaceTimeFrame = extern struct {
+    position: [4]f32 align(16),
+    axis_x: [4]f32 align(16),
+    axis_y: [4]f32 align(16),
+    axis_z: [4]f32 align(16),
+    axis_t: [4]f32 align(16),
+};
+
 pub const Uniform = extern struct {
         position: [4]f32 align(16),
         speed: [3]f32 align(16),

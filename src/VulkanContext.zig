@@ -23,8 +23,6 @@ const PipelineLayouts = [Stage.all.len]vk.PipelineLayout;
 const Pipelines = [Stage.all.len]vk.Pipeline;
 
 
-controller: *Controller,
-glfw_callback: *GlfwCallback,
 window: *glfw.Window,
 instance: vk.InstanceProxy,
 debug_messenger: vk.DebugUtilsMessengerEXT,
@@ -37,14 +35,12 @@ swapchain_info: vk.SwapchainCreateInfoKHR,
 command_pool: vk.CommandPool,
 set_pool: vk.DescriptorPool,
 
-swapchain_outdate: bool = true,
 swapchain: vk.SwapchainKHR = .null_handle,
 swapchain_images: std.ArrayList(vk.Image) = .empty,
 swapchain_views: std.ArrayList(vk.ImageView) = .empty,
 swapchain_semaphores: std.ArrayList(vk.Semaphore) = .empty,
 
 next_frame: u1 = 0, // total 2 frames, one is on rendering, one is on recording
-frame_timestamp: i128,
 frame_fences: Fences,
 acquiring_semaphore: vk.Semaphore,
 computing_commands: Commands,
@@ -76,14 +72,9 @@ const log = std.log.scoped(.VulkanContext);
 var instance_wrapper: vk.InstanceWrapper = .{ .dispatch = .{} };
 var device_wrapper: vk.DeviceWrapper = .{ .dispatch = .{} };
 
-pub fn init(controller: *Controller) !VulkanContext {
-    const glfw_callback = try helper.allocator.create(GlfwCallback);
-    errdefer helper.allocator.destroy(glfw_callback);
-    glfw_callback.* = .{};
-
+pub fn init() !VulkanContext {
     const window = try _createWindow();
     errdefer window.destroy();
-    glfw_callback.setCallbacks(window);
 
     const instance = try _createInstance(helper.allocator);
     errdefer instance.destroyInstance(null);
@@ -112,7 +103,6 @@ pub fn init(controller: *Controller) !VulkanContext {
 
     const queue = _getQueue(device, queue_family);
     const swapchain_info = try _getSwapchainInfo(helper.allocator, instance, physical_device, window, surface);
-    controller.camera.setAspectRatio(swapchain_info.image_extent);
 
     const command_pool = try _createCommandPool(device, queue_family);
     errdefer device.destroyCommandPool(command_pool, null);
@@ -146,8 +136,6 @@ pub fn init(controller: *Controller) !VulkanContext {
     errdefer for (pipeline_layouts) |l| device.destroyPipelineLayout(l, null);
 
     return .{
-        .controller = controller,
-        .glfw_callback = glfw_callback,
         .window = window,
         .instance = instance,
         .debug_messenger = debug_messenger,
@@ -160,7 +148,6 @@ pub fn init(controller: *Controller) !VulkanContext {
         .command_pool = command_pool,
         .set_pool = set_pool,
 
-        .frame_timestamp = std.time.nanoTimestamp(),
         .frame_fences = frame_fences,
         .acquiring_semaphore = acquiring_semephore,
         .computing_semaphores = computing_semaphores,
@@ -180,7 +167,6 @@ pub fn init(controller: *Controller) !VulkanContext {
 }
 
 pub fn deinit(self: *VulkanContext) void {
-    defer helper.allocator.destroy(self.glfw_callback);
     defer self.window.destroy();
     defer self.instance.destroyInstance(null);
     defer if (helper.is_debug) self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
@@ -833,11 +819,11 @@ fn _3dExtent(extent2d: vk.Extent2D) vk.Extent3D {
 }
 
 
-pub fn shouldRecreateSwapchain(self: VulkanContext) bool {
-    return self.swapchain_outdate;
-}
-pub fn recreateSwapchain(self: *VulkanContext) !void {
+pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
+    log.debug("recreating swapchain...", .{});
+
     // create new swapchain
+    self.swapchain_info.image_extent = extent;
     self.swapchain_info.old_swapchain = self.swapchain;
     const swapchain = try self.device.createSwapchainKHR(&self.swapchain_info, null);
     errdefer self.device.destroySwapchainKHR(swapchain, null);
@@ -998,7 +984,8 @@ pub fn recreateSwapchain(self: *VulkanContext) !void {
     self.swapchain_images.appendSliceAssumeCapacity(images);
     self.swapchain_views.appendSliceAssumeCapacity(views.items);
     self.swapchain = swapchain;
-    self.swapchain_outdate = false;
+
+    log.debug("swapchain recreated", .{});
 }
 
 pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !void {
@@ -1023,11 +1010,6 @@ pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !voi
 }
 
 
-pub fn shouldExit(self: VulkanContext) bool {
-    return self.window.shouldClose();
-}
-
-
 pub const FrameResouces = struct {
     swapchain: vk.SwapchainKHR,
     extent: vk.Extent2D,
@@ -1035,8 +1017,6 @@ pub const FrameResouces = struct {
     swapchain_image: vk.Image,
     swapchain_view: vk.ImageView,
     is_suboptimal: bool,
-    swapchain_outdate: *bool,
-    prev_frame_time: i128,
 
     device: vk.DeviceProxy,
     queue: vk.Queue,
@@ -1210,24 +1190,13 @@ pub const FrameResouces = struct {
 
         if (present_result) |result| switch (result) {
             .success => {},
-            .suboptimal_khr => self.swapchain_outdate.* = true,
+            .suboptimal_khr => return error.OutOfDateKHR,
             else => unreachable,
-        } else |err| switch (err) {
-            error.OutOfDateKHR => self.swapchain_outdate.* = true,
-            else => return err,
-        }
+        } else |err| return err;
     }
 };
 
 pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
-    // glfw callback
-    if (self.glfw_callback.takeResizeInfo()) |extent| {
-        self.swapchain_info.image_extent = extent;
-        self.swapchain_outdate = true;
-        self.controller.camera.setAspectRatio(extent);
-        return null;
-    }
-
     const fence = self.frame_fences[self.next_frame];
 
     var wait_count: usize = 0;
@@ -1242,13 +1211,7 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
         std.math.maxInt(u64),
         self.acquiring_semaphore,
         .null_handle,
-    ) catch |err| switch (err) {
-        error.OutOfDateKHR => {
-            self.swapchain_outdate = true;
-            return null;
-        },
-        else => return err,
-    };
+    ) catch |err| return err;
     if (result.result == .not_ready) return null;
 
     try self.device.resetFences(1, &.{fence});
@@ -1260,13 +1223,6 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
         .swapchain_image = self.swapchain_images.items[result.image_index],
         .swapchain_view = self.swapchain_views.items[result.image_index],
         .is_suboptimal = result.result == .suboptimal_khr,
-        .swapchain_outdate = &self.swapchain_outdate,
-        .prev_frame_time = blk: {
-            const curr_time = std.time.nanoTimestamp();
-            const dt = curr_time - self.frame_timestamp;
-            self.frame_timestamp = curr_time;
-            break :blk dt;
-        },
 
         .device = self.device,
         .queue = self.queue,

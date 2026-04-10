@@ -8,6 +8,9 @@ shader_folder: Option(String, null, 's', "shader"),
 iter_per_call: Option(u32, 500, 'i', "iter-pre-call"),
 n_iter_calls: Option(usize, 1, 'n', "n-iter-calls"),
 fov_y: Option(f32, 60, 'f', "fov"),
+circular: Option(bool, false, 'c', "circular"),
+position: Option(f32, 100, 'p', "position"),
+simulation_speed: Option(f32, 1, null, "simulation-speed"),
 
 
 const Arguments = @This();

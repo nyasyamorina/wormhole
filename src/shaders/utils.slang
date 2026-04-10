@@ -5,6 +5,16 @@ struct Camera {
     float3 v;
 };
 
+/// the local space-time frame around `position`,
+/// all axes all orthogonal, and normalized to having space-time length 1 (temporal) or -1 (spacial).
+struct SpaceTimeFrame {
+    float4 position;
+    float4 axis_x;
+    float4 axis_y;
+    float4 axis_z;
+    float4 axis_t;
+};
+
 struct Uniform {
     /// in global coord
     float4 position;
@@ -290,7 +300,7 @@ namespace polar {
 }
 
 
-/// in 2-D space Eddington–Finkelstein coordinates
+/// in 2-D space Eddington–Finkelstein coordinates (radius, angle, `t`)
 ///
 /// note that the `t` component in Eddington–Finkelstein coordinates is not "time",
 /// the actual coordinate time is `t + _signChanger(schwarzschild::radius * ln(abs(r / schwarzschild::radius - 1)))`
@@ -316,7 +326,7 @@ namespace schwarzschild {
         return (tmp1 - sqrt(delta)) / tmp2;
     }
 
-    /// the delta of the component value in transpoting `v` along `d` while maintaining `v` parallel.
+    /// the delta of the component values in transpoting `v` along `d` while maintaining `v` parallel.
     ///
     /// this is a variant of the geodesics equation.
     float3 deltaParallelTransport(float r, float3 d, float3 v) {
@@ -344,8 +354,8 @@ namespace schwarzschild {
 
     [ForceInline]
     float _signChanger(float x) {
-        return  x; // black hole
-        //return -x; // white hole
+        return  x; // for black hole
+        //return -x; // for white hole (not tested)
     }
 }
 

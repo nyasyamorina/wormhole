@@ -4,6 +4,8 @@ const glfw = @import("glfw");
 
 const shader_layout = @import("shader_layout.zig");
 
+const log = std.log.scoped(.math);
+
 
 pub fn dot(u: anytype, v: @TypeOf(u)) @typeInfo(@TypeOf(u)).vector.child {
     return @reduce(.Add, u * v);
@@ -13,7 +15,7 @@ pub fn length(v: anytype) @typeInfo(@TypeOf(v)).vector.child {
 }
 pub fn normalize(v: anytype) @TypeOf(v) {
     const l = length(v);
-    return v / @as(@TypeOf(v), @splat(l));
+    return svm(1 / l, v);
 }
 
 pub fn cross(u: anytype, v: @TypeOf(u)) @TypeOf(u) {
@@ -27,13 +29,162 @@ pub fn cross(u: anytype, v: @TypeOf(u)) @TypeOf(u) {
 
 /// `axis`: normalized
 pub fn rotate3d(p: anytype, axis: @TypeOf(p), angle: @typeInfo(@TypeOf(p)).vector.child) @TypeOf(p) {
-    std.debug.assert(@typeInfo(@TypeOf(p)).vector.len == 3);
-    const sin_v: @TypeOf(p) = @splat(@sin(angle));
-    const cos_v: @TypeOf(p) = @splat(@cos(angle));
-    const tmp_v: @TypeOf(p) = @splat((1 - @cos(angle)) * dot(p, axis));
-    return cos_v * p + tmp_v * axis + sin_v * cross(axis, p);
+    return svm(@cos(angle), p) + svm((1 - @cos(angle)) * dot(p, axis), axis) + svm(@sin(angle), cross(axis, p));
 }
 
 
 /// km/s
 pub const light_speed = 299792.458;
+
+
+pub const v2f32 = @Vector(2, f32);
+pub const v3f32 = @Vector(3, f32);
+pub const v4f32 = @Vector(4, f32);
+
+/// scalar-vector multiplication
+pub fn svm(s: anytype, v: anytype) @TypeOf(v) {
+    return @as(@TypeOf(v), @splat(s)) * v;
+}
+
+pub fn spacial(v: v4f32) v3f32 {
+    return .{v[0], v[1], v[2]};
+}
+pub fn temporal(v: v4f32) f32 {
+    return v[3];
+}
+pub fn spacetime(s: v3f32, t: f32) v4f32 {
+    return .{s[0], s[1], s[2], t};
+}
+
+
+/// in Eddington–Finkelstein coordinates, but with Cartesian spacial components instead of spherical. (x, y, z, `t`)
+///
+/// note that the `t` component in Eddington–Finkelstein coordinates is not "time",
+/// the actual coordinate time is `t + _signChanger(schwarzschild.radius * ln(abs(r / schwarzschild.radius - 1)))`
+pub const schwarzschild = struct {
+    /// = 2GM/c/c
+    pub const radius = 1.0;
+
+    /// inner product (dot product)
+    pub fn inner(p: v4f32, u: v4f32, v: v4f32) f32 {
+        // TODO
+        _ = .{p, u, v};
+        return undefined;
+    }
+
+    /// a wrapper of `schwarzschild.inner`
+    pub const InnerAt = struct {
+        position: v4f32,
+
+        pub fn call(self: schwarzschild.InnerAt, u: v4f32, v: v4f32) f32 {
+            return schwarzschild.inner(self.position, u, v);
+        }
+    };
+
+    /// the local space-time frame around `position`,
+    /// all axes all orthogonal, and normalized to having space-time length 1 (temporal) or -1 (spacial).
+    ///
+    /// the temporal axit is also the forward diretion of the whole frame in space-time.
+    pub const Frame = struct {
+        position: v4f32,
+        axis_x: v4f32,
+        axis_y: v4f32,
+        axis_z: v4f32,
+        axis_t: v4f32,
+
+        /// init frame at the circular orbit around black/white hole
+        pub fn initCircularOrbit(p: v4f32, d: v3f32) !schwarzschild.Frame {
+            const r = length(spacial(p));
+            if (r <= 1.5 * schwarzschild.radius) {
+                log.err("circular orbit does not exist inside photon sphere (1.5x schwarzschild radius), current: {}x", .{r / schwarzschild.radius});
+                return error.InvalidArgument;
+            }
+            // TODO
+            _ = d;
+            return undefined;
+        }
+
+        /// init frame at rest (in a short time)
+        pub fn initAtRest(p: v4f32) !schwarzschild.Frame {
+            const r = length(spacial(p));
+            if (r <= schwarzschild.radius) {
+                log.err("cannot rest inside event horizon (1x schwarzschild radius), current: {}x", .{r / schwarzschild.radius});
+                return error.InvalidArgument;
+            }
+
+            var self: schwarzschild.Frame = .{
+                .position = p,
+                .axis_x = .{1, 0, 0, 0},
+                .axis_y = .{0, 1, 0, 0},
+                .axis_z = .{0, 0, 1, 0},
+                .axis_t = .{0, 0, 0, 1},
+            };
+            self.normalize();
+            return self;
+        }
+
+        /// axes normalization order: t -> y -> x -> z
+        pub fn normalize(self: *schwarzschild.Frame) void {
+            const i: InnerAt = .{ .position = self.position };
+
+            const axis_t = svm(1 / @sqrt(i.call(self.axis_t, self.axis_t)), self.axis_t);
+            self.axis_t = axis_t;
+
+            const axis_y_1 = self.axis_y - svm(i.call(self.axis_y, axis_t), axis_t);
+            const axis_y = svm(1 / @sqrt(-i.call(axis_y_1, axis_y_1)), axis_y_1);
+            self.axis_y = axis_y;
+
+            const axis_x_1 = self.axis_x - svm(i.call(self.axis_x, axis_t), axis_t);
+            const axis_x_2 = axis_x_1 + svm(i.call(axis_x_1, axis_y), axis_y);
+            const axis_x = svm(1 / @sqrt(-i.call(axis_x_2, axis_x_2)), axis_x_2);
+            self.axis_x = axis_x;
+
+            const axis_z_1 = self.axis_z - svm(i.call(self.axis_z, axis_t), axis_t);
+            const axis_z_2 = axis_z_1 + svm(i.call(axis_z_1, axis_y), axis_y);
+            const axis_z_3 = axis_z_2 + svm(i.call(axis_z_2, axis_x), axis_x);
+            const axis_z = svm(1 / @sqrt(-i.call(axis_z_3, axis_z_3)), axis_z_3);
+            self.axis_z = axis_z;
+        }
+
+        /// transport the whole frame forawrd in soace-time
+        pub fn forward(self: *schwarzschild.Frame, step_size: f32) void {
+            // TODO
+            _ = .{self, step_size};
+        }
+
+        /// the Lorentz transformation of the frame
+        pub fn accelerate(self: *schwarzschild.Frame, direction: v3f32) void {
+            // TODO
+            _ = .{self, direction};
+        }
+
+        pub fn rotateSpacial(self: *schwarzschild.Frame, move: v2f32) void {
+            // TODO
+            _ = .{self, move};
+        }
+
+        pub fn toUniform(self: schwarzschild.Frame) shader_layout.SpaceTimeFrame {
+            return .{
+                .position = self.position,
+                .axis_x = self.axis_x,
+                .axis_y = self.axis_y,
+                .axis_z = self.axis_z,
+                .axis_t = self.axis_t,
+            };
+        }
+    };
+
+    /// the delta of the component values in transpoting `v` along `d` while maintaining `v` parallel.
+    ///
+    /// this is a variant of the geodesics equation.
+    pub fn deltaParallelTransport(p: v4f32, d: v4f32, v:v4f32) v4f32 {
+        // TODO
+        _ = .{p, d, v};
+        return undefined;
+    }
+
+    inline fn _signChanger(x: f32) f32 {
+        return  x; // for black hole
+        //return -x; // for white hole (not tested)
+    }
+};

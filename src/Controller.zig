@@ -6,16 +6,21 @@ const helper = @import("helper.zig");
 const math = @import("math.zig");
 const shader_layout = @import("shader_layout.zig");
 
-const float3 = @Vector(3, f32);
-const float4 = @Vector(4, f32);
+const v3f32 = math.v3f32;
+const v4f32 = math.v4f32;
+const normalize = math.normalize;
+const svm = math.svm;
 
+
+space_time_frame: math.schwarzschild.Frame,
+camera_scale: CameraScale,
 
 /// in local coord
 camera: Camera,
 /// in global coord (x,y,z,t)
-position: float4,
+position: v4f32,
 /// in global coord (x,y,z)
-velocity: float3,
+velocity: v3f32,
 /// in local coord
 thrust: f32,
 
@@ -23,19 +28,42 @@ thrust: f32,
 const Controller = @This();
 
 
+pub const CameraScale = struct {
+    u: f32,
+    v: f32,
+    extent_u: f32 = 1,
+    extent_v: f32 = 1,
+
+    pub fn init(fov_y: f32) CameraScale {
+        const s = @tan(fov_y * (std.math.pi / 180.0 / 2.0));
+        return .{ .u = s, .v = s };
+    }
+
+    pub fn setAspectRatio(self: *CameraScale, extent: vk.Extent2D) void {
+        self.extent_u = @floatFromInt(extent.width);
+        self.extent_v = @floatFromInt(extent.height);
+        self.u = self.extent_u / self.extent_v * self.v;
+    }
+
+    pub fn toUniform(self: CameraScale) [2]f32 {
+        return .{self.u, self.v};
+    }
+};
+
+
 pub const Camera = struct {
     /// normalized
-    d: float3,
+    d: v3f32,
     /// normalized
-    u: float3,
+    u: v3f32,
     /// normalized
-    v: float3,
+    v: v3f32,
     scale_u: f32,
     scale_v: f32,
 
     pub const InitInfo = struct {
-        direction: float3,
-        view_up: float3,
+        direction: v3f32,
+        view_up: v3f32,
         /// in deg
         fov_v: f32,
     };
@@ -61,7 +89,7 @@ pub const Camera = struct {
     }
 
     pub fn rotate(self: *Camera, move: [2]f32, speed: f32) void {
-        const move_direction = splat(3, move[0]) * self.u - splat(3, move[1]) * self.v;
+        const move_direction = svm(move[0], self.u) - svm(move[1], self.v);
 
         const rotate_vector = math.cross(move_direction, self.d);
         const rotate_angle = speed * self.scale_v * math.length(rotate_vector);
@@ -72,11 +100,11 @@ pub const Camera = struct {
         self.v = math.rotate3d(self.v, rotate_axis, rotate_angle);
     }
 
-    pub fn into(self: Camera) shader_layout.Camera {
+    pub fn toUniform(self: Camera) shader_layout.Camera {
         return .{
             .direction = self.d,
-            .u = splat(3, self.scale_u) * self.u,
-            .v = splat(3, self.scale_v) * self.v,
+            .u = svm(self.scale_u, self.u),
+            .v = svm(self.scale_v, self.v),
         };
     }
 };
@@ -92,20 +120,20 @@ pub fn accelerate(self: *Controller, direction: @Vector(3, i2), dt: f32) void {
     const space_scale = std.math.sinh(hyperbolic_angle);
     const time_scale = std.math.cosh(hyperbolic_angle);
 
-    const d_local_not_norm: float3 = @floatFromInt(direction);
-    const d_local = splat(3, space_scale) * math.normalize(d_local_not_norm);
-    const d_tangent = splat(3, d_local[0]) * self.camera.u + splat(3, d_local[1]) * self.camera.d + splat(3, d_local[2]) * self.camera.v;
+    const d_local_not_norm: v3f32 = @floatFromInt(direction);
+    const d_local = svm(space_scale, normalize(d_local_not_norm));
+    const d_tangent = svm(d_local[0], self.camera.u) + svm(d_local[1], self.camera.d) + svm(d_local[2], self.camera.v);
 
     const V_t = @sqrt(1 + math.dot(self.velocity, self.velocity));
     const dot = math.dot(d_tangent, self.velocity);
     const k = time_scale + dot / (V_t + 1);
-    self.velocity = d_tangent + splat(3, k) * self.velocity;
+    self.velocity = d_tangent + svm(k, self.velocity);
 }
 
 pub fn step(self: *Controller, dt: f32) void {
     const V_t = @sqrt(1 + math.dot(self.velocity, self.velocity));
-    const velocity: float4 = .{self.velocity[0], self.velocity[1], self.velocity[2], V_t};
-    self.position += splat(4, dt) * velocity;
+    const velocity: v4f32 = .{self.velocity[0], self.velocity[1], self.velocity[2], V_t};
+    self.position += svm(dt, velocity);
 }
 
 
@@ -127,9 +155,4 @@ pub fn printState(self: Controller) !void {
         },
     );
     try helper.stdout.interface.flush();
-}
-
-
-fn splat(comptime len: usize, scale: anytype) @Vector(len, @TypeOf(scale)) {
-    return @splat(scale);
 }

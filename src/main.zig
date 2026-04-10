@@ -8,6 +8,7 @@ const VulkanContext = @import("VulkanContext.zig");
 const shader_layout = @import("shader_layout.zig");
 const math = @import("math.zig");
 const Controller = @import("Controller.zig");
+const GlfwCallback = @import("GlfwCallback.zig");
 
 
 pub const std_options: std.Options = .{
@@ -30,7 +31,16 @@ pub fn main() !void {
     }
     defer glfw.terminate();
 
+    const time_scale = args.simulation_speed.value / std.time.ns_per_s;
+    const position: math.v4f32 = .{0, args.position.value * math.schwarzschild.radius, 0, 0};
+    const frame: math.schwarzschild.Frame = if (args.circular.value)
+        try .initCircularOrbit(position, .{1, 0, 0})
+    else
+        try .initAtRest(position);
     var controller: Controller = .{
+        .space_time_frame = frame,
+        .camera_scale = .init(args.fov_y.value),
+
         .camera = .init(.{
             .direction = .{0, -1, 0},
             .view_up = .{0, 0, 1},
@@ -41,76 +51,101 @@ pub fn main() !void {
         .thrust = 0.1,
     };
 
-    var vk_ctx: VulkanContext = try .init(&controller);
+    var vk_ctx: VulkanContext = try .init();
     defer vk_ctx.deinit();
+
+    const frame_size = vk_ctx.window.getFramebufferSize();
+    var glfw_cb: GlfwCallback = .{ .frame_width = frame_size.width, .frame_height = frame_size.height };
+    glfw_cb.setCallbacks(vk_ctx.window);
 
     try buildPipelines(&vk_ctx, args.slangc.value, args.shader_folder.value);
 
+    var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.87).init else void {};
+    var main_loop_timestamp: i128 = std.time.nanoTimestamp();
+
     var print_state_failed = false;
-    var last_print_state_time = vk_ctx.frame_timestamp;
+    var last_print_state_timestampp = main_loop_timestamp;
     helper.stdout.interface.print("\nstate:\n\x1b[s", .{}) catch {};
 
-    var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.87).init else void {};
-
-    if (helper.is_debug) std.log.info("entering main loop...", .{});
-    defer if (helper.is_debug) std.log.info("main loop exited.", .{});
-    while (!vk_ctx.shouldExit()) {
+    std.log.debug("entering main loop...", .{});
+    std.log.debug("main loop exited.", .{});
+    main_loop: while (!vk_ctx.window.shouldClose()) {
 
         if (helper.is_debug) timer.start(.loop);
         glfw.pollEvents();
 
-        if (vk_ctx.glfw_callback.q_pressed) vk_ctx.window.setShouldClose(true);
+        const current_timestamp = std.time.nanoTimestamp();
+        const time_step = time_scale * @as(f32, @floatFromInt(current_timestamp - main_loop_timestamp));
+        main_loop_timestamp = current_timestamp;
 
-        if (vk_ctx.shouldRecreateSwapchain()) {
-            if (helper.is_debug) std.log.info("recreating swapchain...", .{});
-            try vk_ctx.recreateSwapchain();
-            if (helper.is_debug) std.log.info("swapchain recreated.", .{});
+        if (glfw_cb.q_pressed) {
+            vk_ctx.window.setShouldClose(true);
+            continue :main_loop;
+        }
+        if (glfw_cb.takeResizeInfo()) |extent| {
+            try vk_ctx.recreateSwapchain(extent);
+            controller.camera.setAspectRatio(extent);
+            controller.camera_scale.setAspectRatio(extent);
+            // to prevent too many times swapchain recreation
+            std.Thread.sleep(300 * std.time.ns_per_ms);
         }
 
-        var may_resources = try vk_ctx.acquireFrame();
+        if (glfw_cb.takeMouseMove()) |move| {
+            controller.camera.rotate(move, 0.003);
+        }
+        if (glfw_cb.takeScroll()) |scroll| {
+            controller.changeThrust(scroll);
+        }
+
+        if (glfw_cb.takeMovement()) |movement| {
+            controller.accelerate(movement, time_step);
+        }
+        controller.step(time_step);
+
+        if (!print_state_failed and main_loop_timestamp - last_print_state_timestampp >= std.time.ns_per_s / 2) {
+            if (controller.printState()) {
+                last_print_state_timestampp = main_loop_timestamp;
+            } else |err| {
+                std.log.warn("failed to print state: {t}", .{err});
+                print_state_failed = true;
+            }
+            if (helper.is_debug) timer.report();
+        }
+
+        var may_error: ?anyerror = null;
+        var may_resources = vk_ctx.acquireFrame() catch |err| blk: {
+            may_error = err;
+            break :blk null;
+        };
         if (may_resources) |*resources| {
             if (helper.is_debug) timer.start(.frame);
-            const dt: f32 = @floatCast(@as(f64, @floatFromInt(resources.prev_frame_time)) / std.time.ns_per_s);
-
-            const mouse_move = vk_ctx.glfw_callback.takeMouseMove();
-            if (mouse_move[0] != 0 or mouse_move[1] != 0) {
-                controller.camera.rotate(mouse_move, 0.003);
-            }
-
-            const scroll = vk_ctx.glfw_callback.takeScroll();
-            if (scroll != 0) {
-                controller.changeThrust(scroll);
-            }
-
-            const movement = vk_ctx.glfw_callback.takeMovement();
-            if (movement[0] != 0 or movement[1] != 0 or movement[2] != 0) {
-                controller.accelerate(movement, dt);
-            }
-
-            controller.step(dt);
-
-            if (!print_state_failed and vk_ctx.frame_timestamp - last_print_state_time >= std.time.ns_per_s / 2) {
-                if (controller.printState()) {
-                    last_print_state_time = vk_ctx.frame_timestamp;
-                } else |err| {
-                    std.log.warn("failed to print state: {t}", .{err});
-                    print_state_failed = true;
-                }
-                if (helper.is_debug) timer.report();
-            }
 
             try resources.setUniform(.{
-                .camera = controller.camera.into(),
+                .camera = controller.camera.toUniform(),
                 .position = controller.position,
                 .speed = controller.velocity,
                 .iter_per_call = args.iter_per_call.value,
             });
 
-            try resources.drawFrame(.{
+            resources.drawFrame(.{
                 .n_iter_call = args.n_iter_calls.value,
-            });
+            }) catch |err| {
+                may_error = err;
+            };
+
             if (helper.is_debug) timer.stop(.frame);
         }
+
+        if (may_error) |err| switch (err) {
+            error.OutOfDateKHR => {
+                const size = vk_ctx.window.getFramebufferSize();
+                const extent: vk.Extent2D = .{ .width = @intCast(size.width), .height = @intCast(size.height) };
+                try vk_ctx.recreateSwapchain(extent);
+                controller.camera.setAspectRatio(extent);
+                controller.camera_scale.setAspectRatio(extent);
+            },
+            else => return err,
+        };
 
         if (helper.is_debug) timer.stop(.loop);
     }
@@ -193,7 +228,7 @@ fn compileSlangShader(cwd: if (helper.is_windows) []const u8 else std.fs.Dir, sl
     switch (try process.spawnAndWait()) {
         .Exited => |code| {
             if (code == 0) {
-                std.log.info("{s} success", .{shader_compilation});
+                std.log.debug("{s} success", .{shader_compilation});
                 return;
             }
             std.log.err("{s} exited with {d}", .{shader_compilation, code});
@@ -236,7 +271,7 @@ fn buildPipelines(vk_ctx: *VulkanContext, slangc: []const u8, shader_folder: ?[]
     defer if (shader_folder != null) shader_dir.close();
 
     for (shader_layout.Stage.all) |stage| {
-        std.log.info("building pipeline {s}", .{@tagName(stage)});
+        std.log.debug("building pipeline {s}", .{@tagName(stage)});
         const spv_file_name = try std.fmt.allocPrint(helper.allocator, "{s}.spv", .{@tagName(stage)});
         defer helper.allocator.free(spv_file_name);
 
