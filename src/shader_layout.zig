@@ -39,13 +39,6 @@ pub const Stage = enum {
 };
 
 
-pub const Camera = extern struct {
-    /// normalized
-    direction: [3]f32 align(16),
-    u: [3]f32 align(16),
-    v: [3]f32 align(16),
-};
-
 pub const SpaceTimeFrame = extern struct {
     position: [4]f32 align(16),
     axis_x: [4]f32 align(16),
@@ -55,10 +48,9 @@ pub const SpaceTimeFrame = extern struct {
 };
 
 pub const Uniform = extern struct {
-        position: [4]f32 align(16),
-        speed: [3]f32 align(16),
-        camera: Camera,
-        iter_per_call: u32,
+    frame: SpaceTimeFrame,
+    screen_scale: [2]f32 align(8),
+    iter_per_call: u32,
 };
 
 pub const set_layout = struct {

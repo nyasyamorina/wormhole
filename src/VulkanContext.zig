@@ -821,14 +821,20 @@ fn _3dExtent(extent2d: vk.Extent2D) vk.Extent3D {
 
 pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
     log.debug("recreating swapchain...", .{});
+    var timer = if (helper.is_debug) helper.Timer(&.{.total, .swapchain, .swapchain_views, .destroy, .semaphores, .storage_images}, 0).init else void {};
+    if (helper.is_debug) timer.start(.total);
+    self.device.deviceWaitIdle() catch |err| log.err("failed to wait device idle: {t}", .{err});
 
     // create new swapchain
+    if (helper.is_debug) timer.start(.swapchain);
     self.swapchain_info.image_extent = extent;
     self.swapchain_info.old_swapchain = self.swapchain;
     const swapchain = try self.device.createSwapchainKHR(&self.swapchain_info, null);
     errdefer self.device.destroySwapchainKHR(swapchain, null);
+    if (helper.is_debug) timer.stop(.swapchain);
 
     // get swapchain images
+    if (helper.is_debug) timer.start(.swapchain_views);
     const images = try self.device.getSwapchainImagesAllocKHR(swapchain, helper.allocator);
     defer helper.allocator.free(images);
     try self.swapchain_images.ensureTotalCapacity(helper.allocator, images.len);
@@ -838,12 +844,16 @@ pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
     defer views.deinit(helper.allocator);
     errdefer for (views.items) |v| self.device.destroyImageView(v, null);
     for (images) |i| views.appendAssumeCapacity(try _createImageView(self.device, i, self.swapchain_info.image_format));
+    if (helper.is_debug) timer.stop(.swapchain_views);
 
     // growth swapchain semaphores
+    if (helper.is_debug) timer.start(.semaphores);
     const old_len = self.swapchain_semaphores.items.len;
     errdefer if (self.swapchain_semaphores.items.len > old_len) _shrinkSemaphores(self.device, &self.swapchain_semaphores, old_len);
     if (self.swapchain_semaphores.items.len < images.len) try _growthSemaphores(helper.allocator, self.device, &self.swapchain_semaphores, images.len);
+    if (helper.is_debug) timer.stop(.swapchain_views);
 
+    if (helper.is_debug) timer.start(.storage_images);
     if (!std.meta.eql(self.swapchain_info.image_extent, self.storage_extent)) {
         // create new storage images and views
         var storage_images = std.mem.zeroes([in_flight_count][set_layout.storage_count]vk.Image);
@@ -970,8 +980,10 @@ pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
         // update descriptor
         _updateStorageDescriptor(self.device, self.storage_views, self.sets);
     }
+    if (helper.is_debug) timer.stop(.swapchain_views);
 
     // destroy extra swapchain semaphores
+    if (helper.is_debug) timer.start(.destroy);
     if (self.swapchain_semaphores.items.len > images.len) _shrinkSemaphores(self.device, &self.swapchain_semaphores, images.len);
     // destroy old swapchain image views
     for (self.swapchain_views.items) |v| self.device.destroyImageView(v, null);
@@ -979,12 +991,15 @@ pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
     self.swapchain_images.clearRetainingCapacity();
     // destroy old swapchain
     self.device.destroySwapchainKHR(self.swapchain, null);
+    if (helper.is_debug) timer.stop(.destroy);
 
     // store new swapchain and views
     self.swapchain_images.appendSliceAssumeCapacity(images);
     self.swapchain_views.appendSliceAssumeCapacity(views.items);
     self.swapchain = swapchain;
 
+    if (helper.is_debug) timer.stop(.total);
+    if (helper.is_debug) timer.report();
     log.debug("swapchain recreated", .{});
 }
 

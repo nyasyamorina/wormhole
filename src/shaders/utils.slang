@@ -13,16 +13,16 @@ struct SpaceTimeFrame {
     float4 axis_y;
     float4 axis_z;
     float4 axis_t;
+
+    float4 rayDirection(float2 xz) {
+        float4 ray_local = spacetime(normalize(float3(xz[0], 1.0, xz[1])), -1.0);
+        return mul(ray_local, float4x4(axis_x, axis_y, axis_z, axis_t));
+    }
 };
 
 struct Uniform {
-    /// in global coord
-    float4 position;
-    /// in global coord
-    float3 velocity;
-
-    Camera camera;
-
+    SpaceTimeFrame frame;
+    float2 screen_scale;
     uint iter_per_call;
 };
 
@@ -372,3 +372,13 @@ enum class RayTag: uint {
     /// such as get into black hole from outside.
     Invalid,
 };
+
+float3 spacial(float4 v) {
+    return v.xyz;
+}
+float temporal(float4 v) {
+    return v[3];
+}
+float4 spacetime(float3 s, float t) {
+    return float4(s, t);
+}

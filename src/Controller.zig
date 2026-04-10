@@ -6,21 +6,16 @@ const helper = @import("helper.zig");
 const math = @import("math.zig");
 const shader_layout = @import("shader_layout.zig");
 
+const v2f32 = math.v2f32;
 const v3f32 = math.v3f32;
 const v4f32 = math.v4f32;
 const normalize = math.normalize;
+const length = math.length;
 const svm = math.svm;
 
 
 space_time_frame: math.schwarzschild.Frame,
-camera_scale: CameraScale,
-
-/// in local coord
-camera: Camera,
-/// in global coord (x,y,z,t)
-position: v4f32,
-/// in global coord (x,y,z)
-velocity: v3f32,
+screen_scale: ScreenScale,
 /// in local coord
 thrust: f32,
 
@@ -28,24 +23,33 @@ thrust: f32,
 const Controller = @This();
 
 
-pub const CameraScale = struct {
+pub const ScreenScale = struct {
     u: f32,
     v: f32,
-    extent_u: f32 = 1,
-    extent_v: f32 = 1,
+    mouse_scale_u: f32 = 1,
+    mouse_scale_v: f32 = 1,
 
-    pub fn init(fov_y: f32) CameraScale {
+    pub fn init(fov_y: f32) ScreenScale {
         const s = @tan(fov_y * (std.math.pi / 180.0 / 2.0));
         return .{ .u = s, .v = s };
     }
 
-    pub fn setAspectRatio(self: *CameraScale, extent: vk.Extent2D) void {
-        self.extent_u = @floatFromInt(extent.width);
-        self.extent_v = @floatFromInt(extent.height);
-        self.u = self.extent_u / self.extent_v * self.v;
+    pub fn setAspectRatio(self: *ScreenScale, extent: vk.Extent2D) void {
+        const width: f32  = @floatFromInt(extent.width);
+        const height: f32 = @floatFromInt(extent.height);
+        self.u = (width / height) * self.v;
+        self.mouse_scale_u =  self.u / width;
+        self.mouse_scale_v = -self.v / height;
     }
 
-    pub fn toUniform(self: CameraScale) [2]f32 {
+    pub fn unScale(self: ScreenScale, p: [2]f32) [2]f32 {
+        return .{
+            self.mouse_scale_u * p[0],
+            self.mouse_scale_v * p[1],
+        };
+    }
+
+    pub fn toUniform(self: ScreenScale) [2]f32 {
         return .{self.u, self.v};
     }
 };
@@ -110,49 +114,66 @@ pub const Camera = struct {
 };
 
 
+pub fn rotateCamera(self: *Controller, mouse_move: [2]f32, speed: f32) void {
+    const move = self.screen_scale.unScale(mouse_move);
+    const rotate: v3f32 = .{move[1], 0, -move[0]};
+    const axis = normalize(rotate);
+    const angle = speed * length(rotate);
+    self.space_time_frame.rotateSpacial(axis, angle);
+}
+
 pub fn changeThrust(self: *Controller, scroll: f32) void {
     const scroll_scale = 0.05;
     self.thrust *= @exp(scroll_scale * scroll);
 }
 
-pub fn accelerate(self: *Controller, direction: @Vector(3, i2), dt: f32) void {
-    const hyperbolic_angle = dt * self.thrust;
-    const space_scale = std.math.sinh(hyperbolic_angle);
-    const time_scale = std.math.cosh(hyperbolic_angle);
-
-    const d_local_not_norm: v3f32 = @floatFromInt(direction);
-    const d_local = svm(space_scale, normalize(d_local_not_norm));
-    const d_tangent = svm(d_local[0], self.camera.u) + svm(d_local[1], self.camera.d) + svm(d_local[2], self.camera.v);
-
-    const V_t = @sqrt(1 + math.dot(self.velocity, self.velocity));
-    const dot = math.dot(d_tangent, self.velocity);
-    const k = time_scale + dot / (V_t + 1);
-    self.velocity = d_tangent + svm(k, self.velocity);
+pub fn accelerate(self: *Controller, direction: [3]i2, time_step: f32) void {
+    const d: v3f32 = .{@floatFromInt(direction[0]), @floatFromInt(direction[1]), @floatFromInt(direction[2])};
+    self.space_time_frame.accelerate(svm(time_step * self.thrust, normalize(d)));
 }
 
-pub fn step(self: *Controller, dt: f32) void {
-    const V_t = @sqrt(1 + math.dot(self.velocity, self.velocity));
-    const velocity: v4f32 = .{self.velocity[0], self.velocity[1], self.velocity[2], V_t};
-    self.position += svm(dt, velocity);
+pub fn step(self: *Controller, time_step: f32) void {
+    self.space_time_frame.forward(time_step);
 }
 
 
 pub fn printState(self: Controller) !void {
-    const t = math.dot(self.velocity, self.velocity);
-    const beta = @sqrt(t / (1 + t));
+    const i: math.schwarzschild.InnerAt = .{ .position = self.space_time_frame.position };
 
     try helper.stdout.interface.print(
-        "\x1b[u" ++
-        "time (global): {:.2} s\x1b[K\n" ++
-        "position (global): ({:.2} km, {:.2} km, {:.2} km)\x1b[K\n" ++
-        "speed (global): {:.2} km/s ({:.5}% c)\x1b[K\n" ++
-        "movement thrust (local): {:.2} km/s/s\x1b[K\n"
+           "frame:" ++ helper.line_break
+        ++ "  p: {any}" ++ helper.clear_line_and_break
+        ++ "  x: {any}" ++ helper.clear_line_and_break
+        ++ "  y: {any}" ++ helper.clear_line_and_break
+        ++ "  z: {any}" ++ helper.clear_line_and_break
+        ++ "  t: {any}" ++ helper.clear_line_and_break
+        ++ "frame dot products:" ++ helper.line_break
+        ++ "  xx: {}" ++ helper.clear_line_and_break
+        ++ "  yy: {}" ++ helper.clear_line_and_break
+        ++ "  zz: {}" ++ helper.clear_line_and_break
+        ++ "  tt: {}" ++ helper.clear_line_and_break
+        ++ "  tx: {}" ++ helper.clear_line_and_break
+        ++ "  ty: {}" ++ helper.clear_line_and_break
+        ++ "  tz: {}" ++ helper.clear_line_and_break
+        ++ "  xy: {}" ++ helper.clear_line_and_break
+        ++ "  xz: {}" ++ helper.clear_line_and_break
+        ++ "  yz: {}" ++ helper.clear_line_and_break
         , .{
-            self.position[3],
-            self.position[0] * math.light_speed, self.position[1] * math.light_speed, self.position[2] * math.light_speed,
-            beta * math.light_speed, beta * 100,
-            self.thrust * math.light_speed,
+            self.space_time_frame.position,
+            self.space_time_frame.axis_x,
+            self.space_time_frame.axis_y,
+            self.space_time_frame.axis_z,
+            self.space_time_frame.axis_t,
+            i.call(self.space_time_frame.axis_x, self.space_time_frame.axis_x),
+            i.call(self.space_time_frame.axis_y, self.space_time_frame.axis_y),
+            i.call(self.space_time_frame.axis_z, self.space_time_frame.axis_z),
+            i.call(self.space_time_frame.axis_t, self.space_time_frame.axis_t),
+            i.call(self.space_time_frame.axis_t, self.space_time_frame.axis_x),
+            i.call(self.space_time_frame.axis_t, self.space_time_frame.axis_y),
+            i.call(self.space_time_frame.axis_t, self.space_time_frame.axis_z),
+            i.call(self.space_time_frame.axis_x, self.space_time_frame.axis_y),
+            i.call(self.space_time_frame.axis_x, self.space_time_frame.axis_z),
+            i.call(self.space_time_frame.axis_y, self.space_time_frame.axis_z),
         },
     );
-    try helper.stdout.interface.flush();
 }

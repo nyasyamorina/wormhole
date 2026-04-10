@@ -31,19 +31,24 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     float4 ray_polar = ray_tex.Load(thread_id.xy);
     float4 ray_plane_y_axis_and_ray_compression = ray_plane_y_axis_and_ray_compression_tex.Load(thread_id.xy);
 
-    // convert ray from 2-D polar coordinate to 3-D Cartesian coordinate
-    float3 x_axis = normalize(uniform.position.xyz);
-    float3 y_axis = ray_plane_y_axis_and_ray_compression.xyz;
+    // convert ray from 2-D polar coordinate to 2-D Cartesian coordinate
     float2[2] ray_2d = polar.toCartesian(ray_polar.xy, ray_polar.zw);
-    float3 ray_position  = ray_2d[0].x * x_axis + ray_2d[0].y * y_axis;
-    float3 ray_space = normalize(ray_2d[1].x * x_axis + ray_2d[1].y * y_axis);
+    float2 ray_p_2d = ray_2d[0];
+    float2 ray_d_2d = ray_2d[1];
+
+    // convert ray from 2-D Cartesian coordinate to 3-D Cartesian coordinate
+    float3 x_axis = normalize(spacial(uniform.frame.position));
+    float3 y_axis = ray_plane_y_axis_and_ray_compression.xyz;
+    float3 ray_position  = ray_p_2d.x * x_axis + ray_p_2d.y * y_axis;
+    float3 ray_direction = ray_d_2d.x * x_axis + ray_d_2d.y * y_axis;
 
     // note that the Doppler effect in relativity is purely cause by coordinate transformation,
     // because `ray` has 0 space-time length, `k * ray` also has 0 space-time length, where `k` is any real number,
     // although `k * any` is a valid ray, and has the same direction as `ray`, but its time component is changed,
     // and that is what cause the wavelength of light changed.
     // because we are sending light "back in time", the time component is negative.
-    float freq_scale = 1.0;// ray_plane_y_axis_and_ray_compression.w;
+    float freq_scale = ray_plane_y_axis_and_ray_compression.w;
+    freq_scale *= 1.0 - schwarzschild::radius / ray_polar[0]; // correction for the finite simulation
 
     float3 color;
 
@@ -54,7 +59,7 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     } else if (ray_polar.x <= 10.0 * schwarzschild::radius) {
         color = {0.0, 0.0, 0.5};
     } else {
-        color = renderCelestialSphere(ray_space, freq_scale);
+        color = renderCelestialSphere(normalize(ray_direction), freq_scale);
     }
 
     // crosshair

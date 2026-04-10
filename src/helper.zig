@@ -32,6 +32,9 @@ var stdout_buff: [512]u8 = undefined;
 var stdout_handle: std.fs.File = undefined;
 pub var stdout: std.fs.File.Writer = undefined;
 
+pub const line_break = if (is_windows) "\r\n" else "\n";
+pub const clear_line_and_break = "\x1b[K" ++ line_break;
+
 pub fn init() !void {
     cwd = std.fs.cwd();
 
@@ -77,7 +80,7 @@ pub fn Timer(comptime tags: []const @TypeOf(.enum_literal), comptime smooth: f32
         pub fn report(self: @This()) void {
             std.debug.print("timer report:\n", .{});
             inline for (tags, self.state) |t, s| {
-                std.debug.print("  {s}: {:.02} ms\x1b[K\n", .{@tagName(t), s});
+                std.debug.print("  {s}: {:.02} ms" ++ clear_line_and_break, .{@tagName(t), s});
             }
         }
     };

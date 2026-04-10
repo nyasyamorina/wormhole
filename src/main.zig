@@ -39,15 +39,7 @@ pub fn main() !void {
         try .initAtRest(position);
     var controller: Controller = .{
         .space_time_frame = frame,
-        .camera_scale = .init(args.fov_y.value),
-
-        .camera = .init(.{
-            .direction = .{0, -1, 0},
-            .view_up = .{0, 0, 1},
-            .fov_v = args.fov_y.value,
-        }),
-        .position = .{0, 1.001 * math.schwarzschild.radius, 0, 0},
-        .velocity = .{0, 0, 0},
+        .screen_scale = .init(args.fov_y.value),
         .thrust = 0.1,
     };
 
@@ -84,14 +76,13 @@ pub fn main() !void {
         }
         if (glfw_cb.takeResizeInfo()) |extent| {
             try vk_ctx.recreateSwapchain(extent);
-            controller.camera.setAspectRatio(extent);
-            controller.camera_scale.setAspectRatio(extent);
+            controller.screen_scale.setAspectRatio(extent);
             // to prevent too many times swapchain recreation
             std.Thread.sleep(300 * std.time.ns_per_ms);
         }
 
-        if (glfw_cb.takeMouseMove()) |move| {
-            controller.camera.rotate(move, 0.003);
+        if (glfw_cb.takeMouseMove()) |mouse_move| {
+            controller.rotateCamera(mouse_move, 1);
         }
         if (glfw_cb.takeScroll()) |scroll| {
             controller.changeThrust(scroll);
@@ -103,13 +94,12 @@ pub fn main() !void {
         controller.step(time_step);
 
         if (!print_state_failed and main_loop_timestamp - last_print_state_timestampp >= std.time.ns_per_s / 2) {
-            if (controller.printState()) {
+            if (printStateTick(controller, timer)) {
                 last_print_state_timestampp = main_loop_timestamp;
             } else |err| {
                 std.log.warn("failed to print state: {t}", .{err});
                 print_state_failed = true;
             }
-            if (helper.is_debug) timer.report();
         }
 
         var may_error: ?anyerror = null;
@@ -121,9 +111,8 @@ pub fn main() !void {
             if (helper.is_debug) timer.start(.frame);
 
             try resources.setUniform(.{
-                .camera = controller.camera.toUniform(),
-                .position = controller.position,
-                .speed = controller.velocity,
+                .frame = controller.space_time_frame.toUniform(),
+                .screen_scale = controller.screen_scale.toUniform(),
                 .iter_per_call = args.iter_per_call.value,
             });
 
@@ -141,8 +130,7 @@ pub fn main() !void {
                 const size = vk_ctx.window.getFramebufferSize();
                 const extent: vk.Extent2D = .{ .width = @intCast(size.width), .height = @intCast(size.height) };
                 try vk_ctx.recreateSwapchain(extent);
-                controller.camera.setAspectRatio(extent);
-                controller.camera_scale.setAspectRatio(extent);
+                controller.screen_scale.setAspectRatio(extent);
             },
             else => return err,
         };
@@ -150,6 +138,7 @@ pub fn main() !void {
         if (helper.is_debug) timer.stop(.loop);
     }
 }
+
 
 const base_shaders = struct {
     pub const utils: []const u8 = @embedFile("utils.slang.xz");
@@ -293,4 +282,12 @@ fn buildPipelines(vk_ctx: *VulkanContext, slangc: []const u8, shader_folder: ?[]
 
         try vk_ctx.buildPipeline(stage, code);
     }
+}
+
+
+fn printStateTick(controller: Controller, timer: anytype) !void {
+    try helper.stdout.interface.print("\x1b[u", .{});
+    try controller.printState();
+    if (helper.is_debug) timer.report();
+    try helper.stdout.interface.flush();
 }

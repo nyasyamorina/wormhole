@@ -24,23 +24,23 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
     float2 uv = getScreenCoordinate(thread_id.xy, extent);
-    float3 ray_local_space = uv.x * uniform.camera.u + uv.y * uniform.camera.v + uniform.camera.direction;
+    float4 ray_position = uniform.frame.position;
+    float4 ray_direction = uniform.frame.rayDirection(uv * uniform.screen_scale);
 
-    /// light ray has space-time length of 0, and we should send light "back in time" to figure out what we see.
-    float4 ray_local = float4(normalize(ray_local_space), -1.0);
-    float4 ray = ray_local;//special_relativity::localToGlobal(ray_local, uniform.velocity);
+    // scale ray direction so that its tempolar component is equal to -1
+    float ray_compression = -1.0 / temporal(ray_direction);
+    ray_direction *= ray_compression;
 
-    // convert ray in 3-D Cartesian coordinate to 2-D polar coordinate
-    float3 x_axis = normalize(uniform.position.xyz);
-    float3 y_axis = normalize(ray.xyz - dot(ray.xyz, x_axis) * x_axis);
-    float2 ray_2d = {dot(ray.xyz, x_axis), dot(ray.xyz, y_axis)};
-    float2 position_2d = {length(uniform.position.xyz), 0.0};
-    float2[2] ray_polar = polar.fromCartesian(position_2d, ray_2d);
+    // convert ray in 3-D Cartesian coordinate to 2-D Cartesian coordinate
+    float3 x_axis = normalize(spacial(uniform.frame.position));
+    float3 y_axis = normalize(spacial(ray_direction) - dot(spacial(ray_direction), x_axis) * x_axis);
+    float2 ray_p_2d = {length(spacial(ray_position)), 0.0};
+    float2 ray_d_2d = {dot(spacial(ray_direction), x_axis), dot(spacial(ray_direction), y_axis)};
 
-    Optional<float> dt = schwarzschild::nullBackwardTime(ray_polar[0][0], ray_polar[1]);
-    RayTag tag = (dt == none) ? RayTag::NotExist : RayTag::None;
-    float ray_compression = (dt == none) ? 0.0 : (-1.0 / dt.value);
-    if (dt != none) ray_polar[1] *= ray_compression;
+    // convert ray in 2-D Cartesian coordinate to 2-D polar coordinate
+    float2[2] ray_polar = polar.fromCartesian(ray_p_2d, ray_d_2d);
+
+    RayTag tag = RayTag::None;
 
     ray_tex.Store(thread_id.xy, float4(ray_polar[0], ray_polar[1]));
     ray_plane_y_axis_and_ray_compression_tex.Store(thread_id.xy, float4(y_axis, ray_compression));

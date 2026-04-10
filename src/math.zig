@@ -7,6 +7,14 @@ const shader_layout = @import("shader_layout.zig");
 const log = std.log.scoped(.math);
 
 
+pub inline fn sqr(x: anytype) @TypeOf(x) {
+    return x * x;
+}
+pub inline fn cub(x: anytype) @TypeOf(x) {
+    return x * x * x;
+}
+
+
 pub fn dot(u: anytype, v: @TypeOf(u)) @typeInfo(@TypeOf(u)).vector.child {
     return @reduce(.Add, u * v);
 }
@@ -67,9 +75,21 @@ pub const schwarzschild = struct {
 
     /// inner product (dot product)
     pub fn inner(p: v4f32, u: v4f32, v: v4f32) f32 {
-        // TODO
-        _ = .{p, u, v};
-        return undefined;
+        const inv_r = 1 / length(spacial(p));
+        const r_11 = schwarzschild.radius * inv_r;
+        const s_11 = svm(inv_r, spacial(p));
+
+        const s_u = s_11 * spacial(u);
+        const s_v = s_11 * spacial(v);
+
+        const flat_tt = temporal(u) * temporal(v);
+        const flat_ss = @reduce(.Add, spacial(u) * spacial(v));
+
+        const cross_tt = temporal(u) * temporal(v);
+        const cross_ts = _signChanger(@reduce(.Add, svm(temporal(u), s_v) + svm(temporal(v), s_u)));
+        const cross_ss = @reduce(.Add, svm(s_u[0], s_v) + svm(s_u[1], s_v) + svm(s_u[2], s_v));
+
+        return (flat_tt - flat_ss) - r_11 * (cross_tt + cross_ts + cross_ss);
     }
 
     /// a wrapper of `schwarzschild.inner`
@@ -119,12 +139,12 @@ pub const schwarzschild = struct {
                 .axis_z = .{0, 0, 1, 0},
                 .axis_t = .{0, 0, 0, 1},
             };
-            self.normalize();
+            self.normalizeAxes();
             return self;
         }
 
         /// axes normalization order: t -> y -> x -> z
-        pub fn normalize(self: *schwarzschild.Frame) void {
+        pub fn normalizeAxes(self: *schwarzschild.Frame) void {
             const i: InnerAt = .{ .position = self.position };
 
             const axis_t = svm(1 / @sqrt(i.call(self.axis_t, self.axis_t)), self.axis_t);
@@ -158,9 +178,17 @@ pub const schwarzschild = struct {
             _ = .{self, direction};
         }
 
-        pub fn rotateSpacial(self: *schwarzschild.Frame, move: v2f32) void {
-            // TODO
-            _ = .{self, move};
+        /// `axis`: normalized
+        pub fn rotateSpacial(self: *schwarzschild.Frame, axis: v3f32, angle: f32) void {
+            const r_x = rotate3d(v3f32 {1, 0, 0}, axis, angle);
+            const r_y = rotate3d(v3f32 {0, 1, 0}, axis, angle);
+            const r_z = rotate3d(v3f32 {0, 0, 1}, axis, angle);
+            const axis_x = svm(r_x[0], self.axis_x) + svm(r_x[1], self.axis_y) + svm(r_x[2], self.axis_z);
+            const axis_y = svm(r_y[0], self.axis_x) + svm(r_y[1], self.axis_y) + svm(r_y[2], self.axis_z);
+            const axis_z = svm(r_z[0], self.axis_x) + svm(r_z[1], self.axis_y) + svm(r_z[2], self.axis_z);
+            self.axis_x = axis_x;
+            self.axis_y = axis_y;
+            self.axis_z = axis_z;
         }
 
         pub fn toUniform(self: schwarzschild.Frame) shader_layout.SpaceTimeFrame {
