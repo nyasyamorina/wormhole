@@ -27,7 +27,6 @@ struct Uniform {
 };
 
 
-
 static const float pi = 3.14159265358979323846264338327950288419716939937510;
 
 
@@ -166,36 +165,6 @@ float3 acesToneMap(float3 color) {
 }
 
 
-namespace special_relativity {
-    /// consider the camera 4-velocity `V` in space-time, it is also the time axis of the tangent space-time of the camera,
-    /// `V` has space-time length of 1, so the time component of `V` is `V.t = sqrt(1 + dot(V.xyz, V.xyz))`.
-    ///
-    /// consider a Lorenz transformation `L` that transform the global time axis `{1,0,0,0}` into `V`,
-    /// and `L` can also transform vector in tangent space-time to global space-time.
-    ///
-    /// the speed of the camera for "global observers" is `v = length(V.xyz) / V.t`,
-    /// so the Lorenz factor of `L` is `γ = 1 / sqrt(1 - β * β)`, where `β = v/c` and `c` is the speed of light, we set `c = 1` here.
-    /// then yields `γ = V.t`.
-    ///
-    /// consider a Lorenz transformation in 1-d space `l`, and `l` has the same Lorenz factor as `L`,
-    /// then `l` can transform `{1,0}` into `{V.t,length(V.xyz)}`.
-    /// consider a space rotation `R` that transform `V.xyz` into `{length(V.xyz),0,0}`,
-    /// then the full `L` is construct as `L = inv(R) * l * R`.
-    ///
-    /// fortunately, there is no need to calculate `R`, because the net effect of `L` in space is expanding or shrinking along `V.xyz`,
-    /// marked `L` applies to arbitrary space-time vector `A` gets `B`, and assume `B.xyz = A.xyz + k * normalize(V.xyz)`,
-    /// consider `l` applies to `{t₀,x₀}` gets `{t₁,x₁} = {γ * (t₀ + β * x₀), γ * (β * t₀ + x₀)}`, then `x₁ = x₀ + k`,
-    /// yields `B.xyz = A.xyz + (A.t + dot(A.xyz, V.xyz) / (V.t + 1)) * V.xyz` and `B.t = A.t * V.t + dot(A.xyz, V.xyz)`.
-    float4 localToGlobal(float4 A, float3 V_xyz) {
-        float V_t = sqrt(1 + dot(V_xyz, V_xyz));
-        float scale = A.w + dot(A.xyz, V_xyz) / (V_t + 1);
-        float3 space_comp = A.xyz + scale * V_xyz;
-        float time_comp = dot(A, float4(V_xyz, V_t));
-        return float4(space_comp, time_comp);
-    }
-}
-
-
 /// temperature range [2, 30]*1000 K
 namespace black_body {
     float relRadiance(float wave_length, float temp) {
@@ -223,7 +192,6 @@ namespace black_body {
         return cie::table_wave_length_step * cie::XYZ_to_linear_sRGB(t);
     }
 }
-
 
 namespace cie {
     float3 XYZ_to_linear_sRGB(float3 xyz) {
@@ -372,6 +340,7 @@ enum class RayTag: uint {
     /// such as get into black hole from outside.
     Invalid,
 };
+
 
 float3 spacial(float4 v) {
     return v.xyz;

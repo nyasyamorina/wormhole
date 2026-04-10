@@ -54,16 +54,49 @@ pub fn svm(s: anytype, v: anytype) @TypeOf(v) {
     return @as(@TypeOf(v), @splat(s)) * v;
 }
 
-pub fn spacial(v: v4f32) v3f32 {
+pub inline fn spacial(v: v4f32) v3f32 {
     return .{v[0], v[1], v[2]};
 }
-pub fn temporal(v: v4f32) f32 {
+pub inline fn temporal(v: v4f32) f32 {
     return v[3];
 }
-pub fn spacetime(s: v3f32, t: f32) v4f32 {
+pub inline fn spacetime(s: v3f32, t: f32) v4f32 {
     return .{s[0], s[1], s[2], t};
 }
 
+
+pub const special_relativity = struct {
+    /// consider the camera 4-velocity `V` in space-time, it is also the time axis of the tangent space-time of the camera,
+    /// `V` has space-time length of 1, so the time component of `V` is `temporal(V) = sqrt(1 + dot(spacial(V), spacial(V)))`.
+    ///
+    /// consider a Lorenz transformation `L` that transform the global time axis `spacetime({0,0,0}, 1)` into `V`.
+    /// the speed of the camera for "global observers" is `v = length(spacial(V)) / temporal(V)`,
+    /// so the Lorenz factor of `L` is `γ = 1 / sqrt(1 - β * β)`, where `β = v/c` and `c` is the speed of light, we set `c = 1` here.
+    /// then yields `γ = temporal(V)`.
+    ///
+    /// consider a Lorenz transformation in 1-d space `l`, and `l` has the same Lorenz factor as `L`,
+    /// then `l` can transform `spacetime(0, 1)` into `spacetime(length(spacial(V)), temporal(V))`.
+    /// consider a space rotation `R` that transform `spacial(V)` into `{length(spacial(V)),0,0}`,
+    /// then the full `L` is construct as `L = inv(R) * l * R`.
+    ///
+    /// fortunately, there is no need to calculate `R`, because the net effect of `L` in space is expanding or shrinking along `spacial(V)`,
+    /// marked `L` applies to arbitrary space-time vector `A` gets `B`, and assume `spacial(B) = spacial(A) + k * normalize(spacial(V))`,
+    /// consider `l` applies to `spacetime(x0, t0)` gets `spacetime(x1, t1) = spacetime(γ * (β * t0 + x0), γ * (t0 + β * x0))`, then `x1 = x0 + k`,
+    /// yields `spacial(B) = spacial(A) + (temporal(A) + dot(spacial(A), spacial(V)) / (temporal(V) + 1)) * spacial(V)`
+    /// and `temporal(B) = temporal(A) * temporal(V) + dot(spacial(A), spacial(V))`.
+    pub fn lorentz(A: v4f32, V_spacial: v3f32) v4f32 {
+        const V_temporal = @sqrt(1 + dot(V_spacial, V_spacial));
+        const scale = temporal(A) + dot(spacial(A), V_spacial) / (V_temporal + 1);
+        const B_spacial = spacial(A) + svm(scale, V_spacial);
+        const B_temporal = dot(A, spacetime(V_spacial, V_temporal));
+        return spacetime(B_spacial, B_temporal);
+    }
+
+    /// inner product (dot product)
+    pub fn inner(u: v4f32, v: v4f32) f32 {
+        return temporal(u) * temporal(v) - dot(spacial(u), spacial(v));
+    }
+};
 
 /// in Eddington–Finkelstein coordinates, but with Cartesian spacial components instead of spherical. (x, y, z, `t`)
 ///
@@ -102,7 +135,7 @@ pub const schwarzschild = struct {
     };
 
     /// the local space-time frame around `position`,
-    /// all axes all orthogonal, and normalized to having space-time length 1 (temporal) or -1 (spacial).
+    /// all axes are orthogonal, and normalized to having space-time length 1 (temporal) or -1 (spacial).
     ///
     /// the temporal axit is also the forward diretion of the whole frame in space-time.
     pub const Frame = struct {
@@ -114,14 +147,24 @@ pub const schwarzschild = struct {
 
         /// init frame at the circular orbit around black/white hole
         pub fn initCircularOrbit(p: v4f32, d: v3f32) !schwarzschild.Frame {
-            const r = length(spacial(p));
+            const s = spacial(p);
+            const r = length(s);
             if (r <= 1.5 * schwarzschild.radius) {
                 log.err("circular orbit does not exist inside photon sphere (1.5x schwarzschild radius), current: {}x", .{r / schwarzschild.radius});
                 return error.InvalidArgument;
             }
-            // TODO
-            _ = d;
-            return undefined;
+
+            const direction = normalize(d - svm(dot(d, s) / dot(s, s), s));
+            const time_angle_scale = r * @sqrt(2 * r / schwarzschild.radius);
+            var self: schwarzschild.Frame = .{
+                .position = p,
+                .axis_x = spacetime(.{1, 0, 0}, 0),
+                .axis_y = spacetime(.{0, 1, 0}, 0),
+                .axis_z = spacetime(.{0, 0, 1}, 0),
+                .axis_t = spacetime(direction, time_angle_scale),
+            };
+            self.normalizeAxes();
+            return self;
         }
 
         /// init frame at rest (in a short time)
@@ -134,10 +177,10 @@ pub const schwarzschild = struct {
 
             var self: schwarzschild.Frame = .{
                 .position = p,
-                .axis_x = .{1, 0, 0, 0},
-                .axis_y = .{0, 1, 0, 0},
-                .axis_z = .{0, 0, 1, 0},
-                .axis_t = .{0, 0, 0, 1},
+                .axis_x = spacetime(.{1, 0, 0}, 0),
+                .axis_y = spacetime(.{0, 1, 0}, 0),
+                .axis_z = spacetime(.{0, 0, 1}, 0),
+                .axis_t = spacetime(.{0, 0, 0}, 1),
             };
             self.normalizeAxes();
             return self;
@@ -166,7 +209,7 @@ pub const schwarzschild = struct {
             self.axis_z = axis_z;
         }
 
-        /// transport the whole frame forawrd in soace-time
+        /// transport the whole frame forawrd in space-time
         pub fn forward(self: *schwarzschild.Frame, step_size: f32) void {
             // TODO
             _ = .{self, step_size};
@@ -174,8 +217,18 @@ pub const schwarzschild = struct {
 
         /// the Lorentz transformation of the frame
         pub fn accelerate(self: *schwarzschild.Frame, direction: v3f32) void {
-            // TODO
-            _ = .{self, direction};
+            const axis_x_local = special_relativity.lorentz(spacetime(.{1, 0, 0}, 0), direction);
+            const axis_y_local = special_relativity.lorentz(spacetime(.{0, 1, 0}, 0), direction);
+            const axis_z_local = special_relativity.lorentz(spacetime(.{0, 0, 1}, 0), direction);
+            const axis_t_local = special_relativity.lorentz(spacetime(.{0, 0, 0}, 1), direction);
+            const axis_x = svm(spacial(axis_x_local)[0], self.axis_x) + svm(spacial(axis_x_local)[1], self.axis_y) + svm(spacial(axis_x_local)[2], self.axis_z) + svm(temporal(axis_x_local), self.axis_t);
+            const axis_y = svm(spacial(axis_y_local)[0], self.axis_x) + svm(spacial(axis_y_local)[1], self.axis_y) + svm(spacial(axis_y_local)[2], self.axis_z) + svm(temporal(axis_y_local), self.axis_t);
+            const axis_z = svm(spacial(axis_z_local)[0], self.axis_x) + svm(spacial(axis_z_local)[1], self.axis_y) + svm(spacial(axis_z_local)[2], self.axis_z) + svm(temporal(axis_z_local), self.axis_t);
+            const axis_t = svm(spacial(axis_t_local)[0], self.axis_x) + svm(spacial(axis_t_local)[1], self.axis_y) + svm(spacial(axis_t_local)[2], self.axis_z) + svm(temporal(axis_t_local), self.axis_t);
+            self.axis_x = axis_x;
+            self.axis_y = axis_y;
+            self.axis_z = axis_z;
+            self.axis_t = axis_t;
         }
 
         /// `axis`: normalized
