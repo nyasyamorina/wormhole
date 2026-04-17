@@ -65,6 +65,58 @@ pub inline fn spacetime(s: v3f32, t: f32) v4f32 {
 }
 
 
+
+/// the local space-time frame around `position`,
+/// all axes are orthogonal, and normalized to having space-time length 1 (temporal) or -1 (spacial).
+///
+/// the temporal axit is also the forward diretion of the whole frame in space-time.
+pub const Frame = struct {
+    position: v4f32,
+    axis_x: v4f32,
+    axis_y: v4f32,
+    axis_z: v4f32,
+    axis_t: v4f32,
+
+    /// the Lorentz transformation of the frame
+    pub fn localLorenz(self: *Frame, direction: v3f32) void {
+        const axis_x_local = special_relativity.lorentz(spacetime(.{1, 0, 0}, 0), direction);
+        const axis_y_local = special_relativity.lorentz(spacetime(.{0, 1, 0}, 0), direction);
+        const axis_z_local = special_relativity.lorentz(spacetime(.{0, 0, 1}, 0), direction);
+        const axis_t_local = special_relativity.lorentz(spacetime(.{0, 0, 0}, 1), direction);
+        const axis_x = svm(spacial(axis_x_local)[0], self.axis_x) + svm(spacial(axis_x_local)[1], self.axis_y) + svm(spacial(axis_x_local)[2], self.axis_z) + svm(temporal(axis_x_local), self.axis_t);
+        const axis_y = svm(spacial(axis_y_local)[0], self.axis_x) + svm(spacial(axis_y_local)[1], self.axis_y) + svm(spacial(axis_y_local)[2], self.axis_z) + svm(temporal(axis_y_local), self.axis_t);
+        const axis_z = svm(spacial(axis_z_local)[0], self.axis_x) + svm(spacial(axis_z_local)[1], self.axis_y) + svm(spacial(axis_z_local)[2], self.axis_z) + svm(temporal(axis_z_local), self.axis_t);
+        const axis_t = svm(spacial(axis_t_local)[0], self.axis_x) + svm(spacial(axis_t_local)[1], self.axis_y) + svm(spacial(axis_t_local)[2], self.axis_z) + svm(temporal(axis_t_local), self.axis_t);
+        self.axis_x = axis_x;
+        self.axis_y = axis_y;
+        self.axis_z = axis_z;
+        self.axis_t = axis_t;
+    }
+
+    /// `axis`: normalized
+    pub fn rotateSpacial(self: *Frame, axis: v3f32, angle: f32) void {
+        const r_x = rotate3d(v3f32 {1, 0, 0}, axis, angle);
+        const r_y = rotate3d(v3f32 {0, 1, 0}, axis, angle);
+        const r_z = rotate3d(v3f32 {0, 0, 1}, axis, angle);
+        const axis_x = svm(r_x[0], self.axis_x) + svm(r_x[1], self.axis_y) + svm(r_x[2], self.axis_z);
+        const axis_y = svm(r_y[0], self.axis_x) + svm(r_y[1], self.axis_y) + svm(r_y[2], self.axis_z);
+        const axis_z = svm(r_z[0], self.axis_x) + svm(r_z[1], self.axis_y) + svm(r_z[2], self.axis_z);
+        self.axis_x = axis_x;
+        self.axis_y = axis_y;
+        self.axis_z = axis_z;
+    }
+
+    pub fn toUniform(self: Frame) shader_layout.SpaceTimeFrame {
+        return .{
+            .position = self.position,
+            .axis_x = self.axis_x,
+            .axis_y = self.axis_y,
+            .axis_z = self.axis_z,
+            .axis_t = self.axis_t,
+        };
+    }
+};
+
 pub const special_relativity = struct {
     /// consider the camera 4-velocity `V` in space-time, it is also the time axis of the tangent space-time of the camera,
     /// `V` has space-time length of 1, so the time component of `V` is `temporal(V) = sqrt(1 + dot(spacial(V), spacial(V)))`.
@@ -110,8 +162,8 @@ pub const schwarzschild = struct {
     pub fn inner(p: v4f32, u: v4f32, v: v4f32) f32 {
         const inv_r = 1 / length(spacial(p));
         const r_11 = schwarzschild.radius * inv_r;
-        const s_11 = svm(inv_r, spacial(p));
 
+        const s_11 = svm(inv_r, spacial(p));
         const s_u = s_11 * spacial(u);
         const s_v = s_11 * spacial(v);
 
@@ -134,19 +186,21 @@ pub const schwarzschild = struct {
         }
     };
 
-    /// the local space-time frame around `position`,
-    /// all axes are orthogonal, and normalized to having space-time length 1 (temporal) or -1 (spacial).
-    ///
-    /// the temporal axit is also the forward diretion of the whole frame in space-time.
-    pub const Frame = struct {
-        position: v4f32,
-        axis_x: v4f32,
-        axis_y: v4f32,
-        axis_z: v4f32,
-        axis_t: v4f32,
+
+    pub const frame = struct {
+        pub const InitState = enum {
+            at_rest,
+            circular_orbit,
+        };
+        pub fn init(state: InitState, p: v4f32, d: v3f32) !Frame {
+            switch (state) {
+                .at_rest => return initAtRest(p),
+                .circular_orbit => return initCircularOrbit(p, d),
+            }
+        }
 
         /// init frame at the circular orbit around black/white hole
-        pub fn initCircularOrbit(p: v4f32, d: v3f32) !schwarzschild.Frame {
+        pub fn initCircularOrbit(p: v4f32, d: v3f32) !Frame {
             const s = spacial(p);
             const r = length(s);
             if (r <= 1.5 * schwarzschild.radius) {
@@ -156,112 +210,126 @@ pub const schwarzschild = struct {
 
             const direction = normalize(d - svm(dot(d, s) / dot(s, s), s));
             const time_angle_scale = r * @sqrt(2 * r / schwarzschild.radius);
-            var self: schwarzschild.Frame = .{
+            var f: Frame = .{
                 .position = p,
                 .axis_x = spacetime(.{1, 0, 0}, 0),
                 .axis_y = spacetime(.{0, 1, 0}, 0),
                 .axis_z = spacetime(.{0, 0, 1}, 0),
-                .axis_t = spacetime(direction, time_angle_scale),
+                .axis_t = spacetime(svm(r, direction), time_angle_scale),
             };
-            self.normalizeAxes();
-            return self;
+            normalizeAxes(&f);
+            return f;
         }
-
         /// init frame at rest (in a short time)
-        pub fn initAtRest(p: v4f32) !schwarzschild.Frame {
+        pub fn initAtRest(p: v4f32) !Frame {
             const r = length(spacial(p));
             if (r <= schwarzschild.radius) {
                 log.err("cannot rest inside event horizon (1x schwarzschild radius), current: {}x", .{r / schwarzschild.radius});
                 return error.InvalidArgument;
             }
 
-            var self: schwarzschild.Frame = .{
+            var f: Frame = .{
                 .position = p,
                 .axis_x = spacetime(.{1, 0, 0}, 0),
                 .axis_y = spacetime(.{0, 1, 0}, 0),
                 .axis_z = spacetime(.{0, 0, 1}, 0),
                 .axis_t = spacetime(.{0, 0, 0}, 1),
             };
-            self.normalizeAxes();
-            return self;
+            normalizeAxes(&f);
+            return f;
         }
 
         /// axes normalization order: t -> y -> x -> z
-        pub fn normalizeAxes(self: *schwarzschild.Frame) void {
-            const i: InnerAt = .{ .position = self.position };
+        pub fn normalizeAxes(f: *Frame) void {
+            const i: InnerAt = .{ .position = f.position };
 
-            const axis_t = svm(1 / @sqrt(i.call(self.axis_t, self.axis_t)), self.axis_t);
-            self.axis_t = axis_t;
+            const axis_t = svm(1 / @sqrt(i.call(f.axis_t, f.axis_t)), f.axis_t);
+            f.axis_t = axis_t;
 
-            const axis_y_1 = self.axis_y - svm(i.call(self.axis_y, axis_t), axis_t);
+            const axis_y_1 = f.axis_y - svm(i.call(f.axis_y, axis_t), axis_t);
             const axis_y = svm(1 / @sqrt(-i.call(axis_y_1, axis_y_1)), axis_y_1);
-            self.axis_y = axis_y;
+            f.axis_y = axis_y;
 
-            const axis_x_1 = self.axis_x - svm(i.call(self.axis_x, axis_t), axis_t);
+            const axis_x_1 = f.axis_x - svm(i.call(f.axis_x, axis_t), axis_t);
             const axis_x_2 = axis_x_1 + svm(i.call(axis_x_1, axis_y), axis_y);
             const axis_x = svm(1 / @sqrt(-i.call(axis_x_2, axis_x_2)), axis_x_2);
-            self.axis_x = axis_x;
+            f.axis_x = axis_x;
 
-            const axis_z_1 = self.axis_z - svm(i.call(self.axis_z, axis_t), axis_t);
+            const axis_z_1 = f.axis_z - svm(i.call(f.axis_z, axis_t), axis_t);
             const axis_z_2 = axis_z_1 + svm(i.call(axis_z_1, axis_y), axis_y);
             const axis_z_3 = axis_z_2 + svm(i.call(axis_z_2, axis_x), axis_x);
             const axis_z = svm(1 / @sqrt(-i.call(axis_z_3, axis_z_3)), axis_z_3);
-            self.axis_z = axis_z;
+            f.axis_z = axis_z;
         }
 
-        /// transport the whole frame forawrd in space-time
-        pub fn forward(self: *schwarzschild.Frame, step_size: f32) void {
-            // TODO
-            _ = .{self, step_size};
-        }
+        /// transport the whole frame forawrd in space-time, stop simulation if return false
+        pub fn forward(f: *Frame, step_size: f32) bool {
+            if (length(spacial(f.position)) < 0.07 * schwarzschild.radius) return false;
 
-        /// the Lorentz transformation of the frame
-        pub fn accelerate(self: *schwarzschild.Frame, direction: v3f32) void {
-            const axis_x_local = special_relativity.lorentz(spacetime(.{1, 0, 0}, 0), direction);
-            const axis_y_local = special_relativity.lorentz(spacetime(.{0, 1, 0}, 0), direction);
-            const axis_z_local = special_relativity.lorentz(spacetime(.{0, 0, 1}, 0), direction);
-            const axis_t_local = special_relativity.lorentz(spacetime(.{0, 0, 0}, 1), direction);
-            const axis_x = svm(spacial(axis_x_local)[0], self.axis_x) + svm(spacial(axis_x_local)[1], self.axis_y) + svm(spacial(axis_x_local)[2], self.axis_z) + svm(temporal(axis_x_local), self.axis_t);
-            const axis_y = svm(spacial(axis_y_local)[0], self.axis_x) + svm(spacial(axis_y_local)[1], self.axis_y) + svm(spacial(axis_y_local)[2], self.axis_z) + svm(temporal(axis_y_local), self.axis_t);
-            const axis_z = svm(spacial(axis_z_local)[0], self.axis_x) + svm(spacial(axis_z_local)[1], self.axis_y) + svm(spacial(axis_z_local)[2], self.axis_z) + svm(temporal(axis_z_local), self.axis_t);
-            const axis_t = svm(spacial(axis_t_local)[0], self.axis_x) + svm(spacial(axis_t_local)[1], self.axis_y) + svm(spacial(axis_t_local)[2], self.axis_z) + svm(temporal(axis_t_local), self.axis_t);
-            self.axis_x = axis_x;
-            self.axis_y = axis_y;
-            self.axis_z = axis_z;
-            self.axis_t = axis_t;
-        }
+            const p1 = f.position;
+            const x1 = f.axis_x;
+            const y1 = f.axis_y;
+            const z1 = f.axis_z;
+            const t1 = f.axis_t;
+            const ax1 = deltaParallelTransport(p1, t1, x1);
+            const ay1 = deltaParallelTransport(p1, t1, y1);
+            const az1 = deltaParallelTransport(p1, t1, z1);
+            const at1 = deltaParallelTransport(p1, t1, t1);
 
-        /// `axis`: normalized
-        pub fn rotateSpacial(self: *schwarzschild.Frame, axis: v3f32, angle: f32) void {
-            const r_x = rotate3d(v3f32 {1, 0, 0}, axis, angle);
-            const r_y = rotate3d(v3f32 {0, 1, 0}, axis, angle);
-            const r_z = rotate3d(v3f32 {0, 0, 1}, axis, angle);
-            const axis_x = svm(r_x[0], self.axis_x) + svm(r_x[1], self.axis_y) + svm(r_x[2], self.axis_z);
-            const axis_y = svm(r_y[0], self.axis_x) + svm(r_y[1], self.axis_y) + svm(r_y[2], self.axis_z);
-            const axis_z = svm(r_z[0], self.axis_x) + svm(r_z[1], self.axis_y) + svm(r_z[2], self.axis_z);
-            self.axis_x = axis_x;
-            self.axis_y = axis_y;
-            self.axis_z = axis_z;
-        }
+            const p2 = p1 + svm(step_size * (2.0/3.0), t1);
+            const x2 = x1 + svm(step_size * (2.0/3.0), ax1);
+            const y2 = y1 + svm(step_size * (2.0/3.0), ay1);
+            const z2 = z1 + svm(step_size * (2.0/3.0), az1);
+            const t2 = t1 + svm(step_size * (2.0/3.0), at1);
+            const ax2 = deltaParallelTransport(p2, t2, x2);
+            const ay2 = deltaParallelTransport(p2, t2, y2);
+            const az2 = deltaParallelTransport(p2, t2, z2);
+            const at2 = deltaParallelTransport(p2, t2, t2);
 
-        pub fn toUniform(self: schwarzschild.Frame) shader_layout.SpaceTimeFrame {
-            return .{
-                .position = self.position,
-                .axis_x = self.axis_x,
-                .axis_y = self.axis_y,
-                .axis_z = self.axis_z,
-                .axis_t = self.axis_t,
-            };
+            f.position += svm(step_size * 0.25, t1) + svm(step_size * 0.75, t2);
+            f.axis_x += svm(step_size * 0.25, ax1) + svm(step_size * 0.75, ax2);
+            f.axis_y += svm(step_size * 0.25, ay1) + svm(step_size * 0.75, ay2);
+            f.axis_z += svm(step_size * 0.25, az1) + svm(step_size * 0.75, az2);
+            f.axis_t += svm(step_size * 0.25, at1) + svm(step_size * 0.75, at2);
+            return true;
         }
     };
+
 
     /// the delta of the component values in transpoting `v` along `d` while maintaining `v` parallel.
     ///
     /// this is a variant of the geodesics equation.
     pub fn deltaParallelTransport(p: v4f32, d: v4f32, v:v4f32) v4f32 {
-        // TODO
-        _ = .{p, d, v};
-        return undefined;
+        const inv_r = 1 / length(spacial(p));
+        const r_12 = schwarzschild.radius * sqr(inv_r);
+        const r_23 = sqr(schwarzschild.radius) * cub(inv_r);
+
+        const s_11 = svm(inv_r, spacial(p));
+        const s_d = s_11 * spacial(d);
+        const s_v = s_11 * spacial(v);
+
+        const tt = temporal(d) * temporal(v);
+        const tsa = @reduce(.Add, svm(temporal(d), s_v) + svm(temporal(v), s_d));
+        const aa = dot(spacial(d), spacial(v));
+        const sasa = @reduce(.Add, svm(s_d[0], s_v) + svm(s_d[1], s_v) + svm(s_d[2], s_v));
+
+        const c_t_tt = _signChanger(0.5 * r_23);
+        const c_t_tsa = 0.5 * (r_12 + r_23);
+        const c_t_aa = _signChanger(-r_12);
+        const c_t_sasa = _signChanger(2 * r_12 + 0.5 * r_23);
+
+        const c_sa_tt = 0.5 * (r_12 - r_23);
+        const c_sa_tsa = _signChanger(-0.5 * r_23);
+        const c_sa_aa = r_12;
+        const c_sa_sasa = -1.5 * r_12 + -0.5 * r_23;
+
+        const res = -spacetime(
+            svm(c_sa_tt * tt + c_sa_tsa * tsa + c_sa_aa * aa + c_sa_sasa * sasa, s_11),
+            c_t_tt * tt + c_t_tsa * tsa + c_t_aa * aa + c_t_sasa * sasa,
+        );
+
+        //std.debug.print("p {any}\nd {any}\nv {any}\nres {any}\n", .{p, d, v, res});
+        return res;
     }
 
     inline fn _signChanger(x: f32) f32 {

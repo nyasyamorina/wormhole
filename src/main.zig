@@ -33,14 +33,11 @@ pub fn main() !void {
 
     const time_scale = args.simulation_speed.value / std.time.ns_per_s;
     const position: math.v4f32 = .{0, args.position.value * math.schwarzschild.radius, 0, 0};
-    const frame: math.schwarzschild.Frame = if (args.circular.value)
-        try .initCircularOrbit(position, .{1, 0, 0})
-    else
-        try .initAtRest(position);
     var controller: Controller = .{
-        .space_time_frame = frame,
+        .frame = try math.schwarzschild.frame.init(args.init_state.value, position, .{1, 0, 1}),
         .screen_scale = .init(args.fov_y.value),
         .thrust = 0.1,
+        .simulation_sub_steps = args.simulation_sub_steps.value,
     };
 
     var vk_ctx: VulkanContext = try .init();
@@ -58,11 +55,13 @@ pub fn main() !void {
     var normalize_timestamp = main_loop_timestamp;
 
     var print_state_failed = false;
-    var last_print_state_timestampp = main_loop_timestamp;
+    var last_print_state_timestampp: i128 = 0;
     helper.stdout.interface.print("\nstate:\n\x1b[s", .{}) catch {};
 
+    var simulation_stopped = false;
+
     std.log.debug("entering main loop...", .{});
-    std.log.debug("main loop exited.", .{});
+    defer std.log.debug("main loop exited.", .{});
     main_loop: while (!vk_ctx.window.shouldClose()) {
 
         if (helper.is_debug) timer.start(.loop);
@@ -90,13 +89,15 @@ pub fn main() !void {
             controller.changeThrust(scroll);
         }
 
-        if (glfw_cb.takeMovement()) |movement| {
-            controller.accelerate(movement, time_step);
+        if (!simulation_stopped) {
+            if (glfw_cb.takeMovement()) |movement| {
+                controller.accelerate(movement, time_step);
+            }
+            if (!controller.step(time_step)) simulation_stopped = true;
         }
-        controller.step(time_step);
 
         if (main_loop_timestamp - normalize_timestamp >= 10 * std.time.ns_per_s) {
-            controller.space_time_frame.normalizeAxes();
+            math.schwarzschild.frame.normalizeAxes(&controller.frame);
             normalize_timestamp = main_loop_timestamp;
         }
 
@@ -118,7 +119,7 @@ pub fn main() !void {
             if (helper.is_debug) timer.start(.frame);
 
             try resources.setUniform(.{
-                .frame = controller.space_time_frame.toUniform(),
+                .frame = controller.frame.toUniform(),
                 .screen_scale = controller.screen_scale.toUniform(),
                 .iter_per_call = args.iter_per_call.value,
             });

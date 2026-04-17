@@ -1,16 +1,18 @@
 const std = @import("std");
 
+const schwarzschild = @import("math.zig").schwarzschild;
 const helper = @import("helper.zig");
 
 
 slangc: Option(String, "slangc", null, "slangc"),
 shader_folder: Option(String, null, 's', "shader"),
-iter_per_call: Option(u32, 500, 'i', "iter-pre-call"),
+iter_per_call: Option(u32, 500, null, "iter-pre-call"),
 n_iter_calls: Option(usize, 1, 'n', "n-iter-calls"),
 fov_y: Option(f32, 60, 'f', "fov"),
-circular: Option(bool, false, 'c', "circular"),
+init_state: Option(schwarzschild.frame.InitState, .at_rest, 'i', "init-state"),
 position: Option(f32, 100, 'p', "position"),
 simulation_speed: Option(f32, 1, null, "simulation-speed"),
+simulation_sub_steps: Option(usize, 100, null, "simulation-sub-steps"),
 
 
 const Arguments = @This();
@@ -113,7 +115,7 @@ pub fn Option(comptime T: type, comptime default: ?T, comptime short: ?u8, compt
                 } else if (std.mem.eql(u8, value_str, "false")) {
                     return false;
                 } else {
-                    _logUnexpectedValue(arg_prefix, "false|true");
+                    _logUnexpectedValue(arg_prefix, "true or false");
                     return error.UnexpectedValue;
                 }
             } else if (@typeInfo(T) == .int) {
@@ -124,6 +126,24 @@ pub fn Option(comptime T: type, comptime default: ?T, comptime short: ?u8, compt
             } else if (@typeInfo(T) == .float) {
                 return std.fmt.parseFloat(T, value_str) catch {
                     _logUnexpectedValue(arg_prefix, "real number");
+                    return error.UnexpectedValue;
+                };
+            } else if (@typeInfo(T) == .@"enum") {
+                return std.meta.stringToEnum(T, value_str) orelse {
+                    const values = comptime build_values: {
+                        var str: [:0]const u8 = "";
+                        const names = std.meta.fieldNames(T);
+                        for (std.meta.fieldNames(T), 0..) |v, idx| {
+                            switch (idx) {
+                                0 => {},
+                                else => str = str ++ ", ",
+                                names.len - 1 => str = str ++ " or ",
+                            }
+                            str = std.fmt.comptimePrint("{s}`{s}`", .{str, v});
+                        }
+                        break :build_values str;
+                    };
+                    _logUnexpectedValue(arg_prefix, values);
                     return error.UnexpectedValue;
                 };
             } else comptime unreachable;

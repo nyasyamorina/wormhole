@@ -52,11 +52,16 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
 
     float3 color;
 
-    if (ray_tag == RayTag::NotExist || ray_tag == RayTag::Catptured) {
+    if (/*ray_tag == RayTag::NotExist ||*/ ray_tag == RayTag::Catptured) {
         color = 0.0;
-    } else if (ray_tag == RayTag::Invalid) {
-        color = {1.0, 0.0, 0.0};
-    } else if (ray_polar.x <= 10.0 * schwarzschild::radius) {
+    //} else if (ray_tag == RayTag::Invalid) {
+    //    color = {1.0, 0.0, 0.0};
+    } else if (ray_polar[0] <= 1.0 * schwarzschild::radius) {
+        // after falling into the black hole, the light in front of observer is coming from
+        // the region between event horizon and the current position of the observer
+        color = {0.0, 0.0, 0.0};
+    } else if (ray_polar[0] <= 10.0 * schwarzschild::radius) {
+        // just a warning for the light simulation not "finished"
         color = {0.0, 0.0, 0.5};
     } else {
         color = renderCelestialSphere(normalize(ray_direction), freq_scale);

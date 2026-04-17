@@ -299,7 +299,6 @@ namespace schwarzschild {
     /// this is a variant of the geodesics equation.
     float3 deltaParallelTransport(float r, float3 d, float3 v) {
         float inv_r = 1.0 / r;
-        float r_11 = schwarzschild::radius * inv_r;
         float r_12 = schwarzschild::radius * sqr(inv_r);
         float r_23 = sqr(schwarzschild::radius) * cub(inv_r);
         // the Christoffel symbols
@@ -331,14 +330,14 @@ namespace schwarzschild {
 enum class RayTag: uint {
     None = 0,
     /// indicate the ray does not exist
-    NotExist,
+    //NotExist,
     /// indicate the ray is escape the simulation region, stop the simulation to save performance.
     Escaped,
     /// indicate the ray is catptured by the black hole and never escaped, stop the simulation to save performance.
     Catptured,
     /// indicate the ray may get into invalid state due to finite simulation precision,
     /// such as get into black hole from outside.
-    Invalid,
+    //Invalid,
 };
 
 

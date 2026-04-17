@@ -14,10 +14,11 @@ const length = math.length;
 const svm = math.svm;
 
 
-space_time_frame: math.schwarzschild.Frame,
+frame: math.Frame,
 screen_scale: ScreenScale,
 /// in local coord
 thrust: f32,
+simulation_sub_steps: usize,
 
 
 const Controller = @This();
@@ -54,72 +55,12 @@ pub const ScreenScale = struct {
     }
 };
 
-
-pub const Camera = struct {
-    /// normalized
-    d: v3f32,
-    /// normalized
-    u: v3f32,
-    /// normalized
-    v: v3f32,
-    scale_u: f32,
-    scale_v: f32,
-
-    pub const InitInfo = struct {
-        direction: v3f32,
-        view_up: v3f32,
-        /// in deg
-        fov_v: f32,
-    };
-    pub fn init(info: InitInfo) Camera {
-        const d = math.normalize(info.direction);
-        const u_n = math.normalize(math.cross(d, info.view_up));
-        const v_n = math.cross(u_n, d);
-
-        const scale = @tan(info.fov_v * (std.math.pi / 180.0 / 2.0));
-
-        return .{
-            .d = d,
-            .u = u_n,
-            .v = v_n,
-            .scale_u = scale,
-            .scale_v = scale,
-        };
-    }
-
-    pub fn setAspectRatio(self: *Camera, extent: vk.Extent2D) void {
-        const aspect_ratio = @as(f32, @floatFromInt(extent.width)) / @as(f32, @floatFromInt(extent.height));
-        self.scale_u = aspect_ratio * self.scale_v;
-    }
-
-    pub fn rotate(self: *Camera, move: [2]f32, speed: f32) void {
-        const move_direction = svm(move[0], self.u) - svm(move[1], self.v);
-
-        const rotate_vector = math.cross(move_direction, self.d);
-        const rotate_angle = speed * self.scale_v * math.length(rotate_vector);
-        const rotate_axis = math.normalize(rotate_vector);
-
-        self.d = math.rotate3d(self.d, rotate_axis, rotate_angle);
-        self.u = math.rotate3d(self.u, rotate_axis, rotate_angle);
-        self.v = math.rotate3d(self.v, rotate_axis, rotate_angle);
-    }
-
-    pub fn toUniform(self: Camera) shader_layout.Camera {
-        return .{
-            .direction = self.d,
-            .u = svm(self.scale_u, self.u),
-            .v = svm(self.scale_v, self.v),
-        };
-    }
-};
-
-
 pub fn rotateCamera(self: *Controller, mouse_move: [2]f32, speed: f32) void {
     const move = self.screen_scale.unScale(mouse_move);
     const rotate: v3f32 = .{move[1], 0, -move[0]};
     const axis = normalize(rotate);
     const angle = speed * length(rotate);
-    self.space_time_frame.rotateSpacial(axis, angle);
+    self.frame.rotateSpacial(axis, angle);
 }
 
 pub fn changeThrust(self: *Controller, scroll: f32) void {
@@ -129,16 +70,20 @@ pub fn changeThrust(self: *Controller, scroll: f32) void {
 
 pub fn accelerate(self: *Controller, direction: [3]i2, time_step: f32) void {
     const d: v3f32 = .{@floatFromInt(direction[0]), @floatFromInt(direction[1]), @floatFromInt(direction[2])};
-    self.space_time_frame.accelerate(svm(std.math.sinh(time_step * self.thrust), normalize(d)));
+    self.frame.localLorenz(svm(std.math.sinh(time_step * self.thrust), normalize(d)));
 }
 
-pub fn step(self: *Controller, time_step: f32) void {
-    self.space_time_frame.forward(time_step);
+pub fn step(self: *Controller, time_step: f32) bool {
+    const step_size = time_step / @as(f32, @floatFromInt(self.simulation_sub_steps));
+    for (0 .. self.simulation_sub_steps) |_| {
+        if (!math.schwarzschild.frame.forward(&self.frame, step_size)) return false;
+    }
+    return true;
 }
 
 
 pub fn printState(self: Controller) !void {
-    const i: math.schwarzschild.InnerAt = .{ .position = self.space_time_frame.position };
+    const i: math.schwarzschild.InnerAt = .{ .position = self.frame.position };
 
     try helper.stdout.interface.print(
            "position:" ++ helper.line_break
@@ -160,21 +105,21 @@ pub fn printState(self: Controller) !void {
         ++ "  xz: {}" ++ helper.clear_line_and_break
         ++ "  yz: {}" ++ helper.clear_line_and_break
         , .{
-            self.space_time_frame.position, length(math.spacial(self.space_time_frame.position)) / math.schwarzschild.radius,
-            self.space_time_frame.axis_x,
-            self.space_time_frame.axis_y,
-            self.space_time_frame.axis_z,
-            self.space_time_frame.axis_t,
-            i.call(self.space_time_frame.axis_x, self.space_time_frame.axis_x),
-            i.call(self.space_time_frame.axis_y, self.space_time_frame.axis_y),
-            i.call(self.space_time_frame.axis_z, self.space_time_frame.axis_z),
-            i.call(self.space_time_frame.axis_t, self.space_time_frame.axis_t),
-            i.call(self.space_time_frame.axis_t, self.space_time_frame.axis_x),
-            i.call(self.space_time_frame.axis_t, self.space_time_frame.axis_y),
-            i.call(self.space_time_frame.axis_t, self.space_time_frame.axis_z),
-            i.call(self.space_time_frame.axis_x, self.space_time_frame.axis_y),
-            i.call(self.space_time_frame.axis_x, self.space_time_frame.axis_z),
-            i.call(self.space_time_frame.axis_y, self.space_time_frame.axis_z),
+            self.frame.position, length(math.spacial(self.frame.position)) / math.schwarzschild.radius,
+            self.frame.axis_x,
+            self.frame.axis_y,
+            self.frame.axis_z,
+            self.frame.axis_t,
+            i.call(self.frame.axis_x, self.frame.axis_x),
+            i.call(self.frame.axis_y, self.frame.axis_y),
+            i.call(self.frame.axis_z, self.frame.axis_z),
+            i.call(self.frame.axis_t, self.frame.axis_t),
+            i.call(self.frame.axis_t, self.frame.axis_x),
+            i.call(self.frame.axis_t, self.frame.axis_y),
+            i.call(self.frame.axis_t, self.frame.axis_z),
+            i.call(self.frame.axis_x, self.frame.axis_y),
+            i.call(self.frame.axis_x, self.frame.axis_z),
+            i.call(self.frame.axis_y, self.frame.axis_z),
         },
     );
 }
