@@ -50,7 +50,7 @@ pub fn main() !void {
     try buildPipelines(&vk_ctx, args.slangc.value, args.shader_folder.value);
 
     var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.87).init else void {};
-    var main_loop_timestamp: i128 = std.time.nanoTimestamp();
+    var main_loop_timestamp = std.time.nanoTimestamp();
 
     var normalize_timestamp = main_loop_timestamp;
 
@@ -59,6 +59,8 @@ pub fn main() !void {
     helper.stdout.interface.print("\nstate:\n\x1b[s", .{}) catch {};
 
     var simulation_stopped = false;
+    const simulation_start_timestamp = main_loop_timestamp;
+    var simulation_timestamp: i128 = main_loop_timestamp;
 
     std.log.debug("entering main loop...", .{});
     defer std.log.debug("main loop exited.", .{});
@@ -93,7 +95,11 @@ pub fn main() !void {
             if (glfw_cb.takeMovement()) |movement| {
                 controller.accelerate(movement, time_step);
             }
-            if (!controller.step(time_step)) simulation_stopped = true;
+            if (controller.step(time_step)) {
+                simulation_timestamp = current_timestamp;
+            } else {
+                simulation_stopped = true;
+            }
         }
 
         if (main_loop_timestamp - normalize_timestamp >= 10 * std.time.ns_per_s) {
@@ -102,7 +108,7 @@ pub fn main() !void {
         }
 
         if (!print_state_failed and main_loop_timestamp - last_print_state_timestampp >= std.time.ns_per_s / 2) {
-            if (printStateTick(controller, timer)) {
+            if (printStateTick(controller, simulation_timestamp - simulation_start_timestamp, timer)) {
                 last_print_state_timestampp = main_loop_timestamp;
             } else |err| {
                 std.log.warn("failed to print state: {t}", .{err});
@@ -293,9 +299,9 @@ fn buildPipelines(vk_ctx: *VulkanContext, slangc: []const u8, shader_folder: ?[]
 }
 
 
-fn printStateTick(controller: Controller, timer: anytype) !void {
+fn printStateTick(controller: Controller, time: i128, timer: anytype) !void {
     try helper.stdout.interface.print("\x1b[u", .{});
-    try controller.printState();
+    try controller.printState(time);
     if (helper.is_debug) try timer.report();
     try helper.stdout.interface.flush();
 }

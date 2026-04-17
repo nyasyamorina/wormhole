@@ -41,6 +41,10 @@ pub fn rotate3d(p: anytype, axis: @TypeOf(p), angle: @typeInfo(@TypeOf(p)).vecto
 }
 
 
+/// x10^30 kg
+pub const solar_mass = 1.988416;
+/// x10^-20 km^3/kg/s^2
+pub const gravitational_constant = 6.6743015;
 /// km/s
 pub const light_speed = 299792.458;
 
@@ -157,6 +161,19 @@ pub const special_relativity = struct {
 pub const schwarzschild = struct {
     /// = 2GM/c/c
     pub const radius = 1.0;
+    /// x10^30 kg
+    pub const mass = schwarzschild.radius * cub(light_speed / 100000.0) / gravitational_constant * 100000;
+
+    pub fn distantTime(p: v4f32) f32 {
+        const r = length(spacial(p));
+        const t = temporal(p);
+        return t + _signChanger(schwarzschild.radius * @log(@abs(r / schwarzschild.radius - 1)));
+    }
+    pub fn deltaDistantTime(p: v4f32, d: v4f32) f32 {
+        const r = length(spacial(p));
+        const dr = dot(spacial(p), spacial(d)) / r;
+        return temporal(d) + _signChanger(schwarzschild.radius * dr / (r - schwarzschild.radius));
+    }
 
     /// inner product (dot product)
     pub fn inner(p: v4f32, u: v4f32, v: v4f32) f32 {

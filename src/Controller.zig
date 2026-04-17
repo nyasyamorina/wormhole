@@ -82,44 +82,53 @@ pub fn step(self: *Controller, time_step: f32) bool {
 }
 
 
-pub fn printState(self: Controller) !void {
+pub fn printState(self: Controller, time: i128) !void {
     const i: math.schwarzschild.InnerAt = .{ .position = self.frame.position };
+    const max_err = @max(
+        @abs(i.call(self.frame.axis_x, self.frame.axis_x) - -1),
+        @abs(i.call(self.frame.axis_y, self.frame.axis_y) - -1),
+        @abs(i.call(self.frame.axis_z, self.frame.axis_z) - -1),
+        @abs(i.call(self.frame.axis_t, self.frame.axis_t) -  1),
+        @abs(i.call(self.frame.axis_t, self.frame.axis_x) -  0),
+        @abs(i.call(self.frame.axis_t, self.frame.axis_y) -  0),
+        @abs(i.call(self.frame.axis_t, self.frame.axis_z) -  0),
+        @abs(i.call(self.frame.axis_x, self.frame.axis_y) -  0),
+        @abs(i.call(self.frame.axis_x, self.frame.axis_z) -  0),
+        @abs(i.call(self.frame.axis_y, self.frame.axis_z) -  0),
+    );
+
+    const r = length(math.spacial(self.frame.position));
+    const v = math.length(math.spacial(self.frame.axis_t));
+    const dr = math.dot(math.spacial(self.frame.position), math.spacial(self.frame.axis_t)) / r;
+    const T = if (r < math.schwarzschild.radius) std.math.nan(f32) else math.schwarzschild.distantTime(self.frame.position);
+    const dT = if (r < math.schwarzschild.radius) std.math.nan(f32) else math.schwarzschild.deltaDistantTime(self.frame.position, self.frame.axis_t);
 
     try helper.stdout.interface.print(
-           "position:" ++ helper.line_break
-        ++ "  {any} ({}x schwarzschild radius)" ++ helper.clear_line_and_break
-        ++ "frame:" ++ helper.line_break
-        ++ "  x: {any}" ++ helper.clear_line_and_break
-        ++ "  y: {any}" ++ helper.clear_line_and_break
-        ++ "  z: {any}" ++ helper.clear_line_and_break
-        ++ "  t: {any}" ++ helper.clear_line_and_break
-        ++ "frame dot products:" ++ helper.line_break
-        ++ "  xx: {}" ++ helper.clear_line_and_break
-        ++ "  yy: {}" ++ helper.clear_line_and_break
-        ++ "  zz: {}" ++ helper.clear_line_and_break
-        ++ "  tt: {}" ++ helper.clear_line_and_break
-        ++ "  tx: {}" ++ helper.clear_line_and_break
-        ++ "  ty: {}" ++ helper.clear_line_and_break
-        ++ "  tz: {}" ++ helper.clear_line_and_break
-        ++ "  xy: {}" ++ helper.clear_line_and_break
-        ++ "  xz: {}" ++ helper.clear_line_and_break
-        ++ "  yz: {}" ++ helper.clear_line_and_break
+           "center object mass: {:.02}x10^30 kg ({:.02}x solar mass)" ++ helper.clear_line_and_break
+        ++ "schwarzschild radius (rs): {:.02} km" ++ helper.clear_line_and_break
+        ++ "your perspective:" ++ helper.line_break
+        ++ "  time: {:.05} s" ++ helper.clear_line_and_break
+        ++ "  speed: {:.02} km/s" ++ helper.clear_line_and_break
+        ++ "  radial position: {:.02} km ({:.05}x rs)" ++ helper.clear_line_and_break
+        ++ "  radial seed: {:.02} km/s ({:.05}x rs/s)" ++ helper.clear_line_and_break
+        ++ "distant perspective:" ++ helper.line_break
+        ++ "  time: {:.05} s" ++ helper.clear_line_and_break
+        ++ "  speed: {:.02} km/s" ++ helper.clear_line_and_break
+        ++ "  radial speed: {:.02} km/s ({:.05}x rs/s)" ++ helper.clear_line_and_break
+        ++ "maximum simulation error: {:.03}%" ++ helper.clear_line_and_break
         , .{
-            self.frame.position, length(math.spacial(self.frame.position)) / math.schwarzschild.radius,
-            self.frame.axis_x,
-            self.frame.axis_y,
-            self.frame.axis_z,
-            self.frame.axis_t,
-            i.call(self.frame.axis_x, self.frame.axis_x),
-            i.call(self.frame.axis_y, self.frame.axis_y),
-            i.call(self.frame.axis_z, self.frame.axis_z),
-            i.call(self.frame.axis_t, self.frame.axis_t),
-            i.call(self.frame.axis_t, self.frame.axis_x),
-            i.call(self.frame.axis_t, self.frame.axis_y),
-            i.call(self.frame.axis_t, self.frame.axis_z),
-            i.call(self.frame.axis_x, self.frame.axis_y),
-            i.call(self.frame.axis_x, self.frame.axis_z),
-            i.call(self.frame.axis_y, self.frame.axis_z),
+            math.schwarzschild.mass, math.schwarzschild.mass / math.solar_mass,
+            math.schwarzschild.radius * math.light_speed,
+
+            @as(f32, @floatFromInt(time)) / std.time.ns_per_s,
+            v * math.light_speed,
+            r * math.light_speed, r / math.schwarzschild.radius,
+            dr * math.light_speed, dr / math.schwarzschild.radius,
+
+            T,
+            v * math.light_speed / dT,
+            dr  * math.light_speed / dT, dr / math.schwarzschild.radius / dT,
+            max_err * 100,
         },
     );
 }
