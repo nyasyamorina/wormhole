@@ -1,8 +1,8 @@
 .{
-    .name = .wormhole,
+    .name = .schwarzschild,
     .version = "0.0.1",
     .minimum_zig_version = "0.15.2",
-    .fingerprint = 0xd0888657d7145c9a,
+    .fingerprint = 0x2d56519868c9032d,
 
     .paths = .{
         "build.zig.zon",

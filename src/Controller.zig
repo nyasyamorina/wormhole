@@ -109,6 +109,7 @@ pub fn printState(self: Controller, time: i128) !void {
         ++ "your perspective:" ++ helper.line_break
         ++ "  time: {:.05} s" ++ helper.clear_line_and_break
         ++ "  speed: {:.02} km/s" ++ helper.clear_line_and_break
+        ++ "  movement thrust: {:.02} km/s/s" ++ helper.clear_line_and_break
         ++ "  radial position: {:.02} km ({:.05}x rs)" ++ helper.clear_line_and_break
         ++ "  radial seed: {:.02} km/s ({:.05}x rs/s)" ++ helper.clear_line_and_break
         ++ "distant perspective:" ++ helper.line_break
@@ -122,6 +123,7 @@ pub fn printState(self: Controller, time: i128) !void {
 
             @as(f32, @floatFromInt(time)) / std.time.ns_per_s,
             v * math.light_speed,
+            self.thrust * math.light_speed,
             r * math.light_speed, r / math.schwarzschild.radius,
             dr * math.light_speed, dr / math.schwarzschild.radius,
 

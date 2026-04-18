@@ -37,7 +37,7 @@ pub fn build(b: *std.Build) !void {
     try addCompressedShaders(b, main_module);
 
     b.installArtifact(b.addExecutable(.{
-        .name = "wormhole",
+        .name = "schwarzschild",
         .root_module = main_module,
         .use_llvm = true, // for lldb debug
     }));
