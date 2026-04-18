@@ -92,7 +92,7 @@ Both player motion and ray tracing utilize numerical solutions to differential e
 
 ## Advanced Usage
 
-The program itself (`special-relativity.exe` or `special-relativity`) is insufficient to run, external shader files are required, and user can provide custom shaders. Running the program in an empty folder with no arguments will generate the shaders used here.
+The program itself (`schwarzschild.exe` or `schwarzschild`) is insufficient to run, external shader files are required, and user can provide custom shaders. Running the program in an empty folder with no arguments will generate the shaders used here.
 
 ### Parameters
 
@@ -117,6 +117,7 @@ The program itself (`special-relativity.exe` or `special-relativity`) is insuffi
 - `--n-iter-calls=<>`: Controls the number of times `iter_ray` is called per frame. Generally, this value doesn't need adjustment. Default: 1.
 
 - `--iter-per-call=<>`: Controls the number of ray tracing calculations performed each time `iter_ray` is called. Higher values ​​result in a smaller blue warning area but also higher GPU usage. Default: 500.
+
 ---
 
 ## Issue Feedback
