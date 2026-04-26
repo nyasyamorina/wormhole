@@ -159,6 +159,9 @@ const base_shaders = struct {
     pub const init_ray: []const u8 = @embedFile("init_ray.slang.xz");
     pub const iter_ray: []const u8 = @embedFile("iter_ray.slang.xz");
     pub const render_ray: []const u8 = @embedFile("render_ray.slang.xz");
+    pub const post_process_1: []const u8 = @embedFile("post_process_1.slang.xz");
+    pub const post_process_2: []const u8 = @embedFile("post_process_2.slang.xz");
+    pub const final: []const u8 = @embedFile("final.slang.xz");
 };
 
 // null stage for `utils.slang`

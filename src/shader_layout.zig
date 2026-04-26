@@ -6,6 +6,9 @@ pub const Stage = enum {
     init_ray,
     iter_ray,
     render_ray,
+    post_process_1,
+    post_process_2,
+    final,
 
     pub const all = std.meta.tags(Stage);
 
@@ -101,5 +104,8 @@ pub const set_layout = struct {
 pub const pipeline_set_layout_indices = struct {
     pub const init_ray: []const usize = &.{0, 1};
     pub const iter_ray: []const usize = &.{0, 1};
-    pub const render_ray: []const usize = &.{0, 1, 2};
+    pub const render_ray: []const usize = &.{0, 1};
+    pub const post_process_1: []const usize = &.{0, 1};
+    pub const post_process_2: []const usize = &.{0, 1};
+    pub const final: []const usize = &.{0, 1, 2};
 };

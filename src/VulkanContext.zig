@@ -9,14 +9,16 @@ const Stage = shader_layout.Stage;
 const set_layout = shader_layout.set_layout;
 const Controller = @import("Controller.zig");
 
+/// init_ray -> iter_ray -> render_ray |-> blit |-> bloom_h |-> bloom_v -> final |-> present
+pub const sync_count = 4;
 pub const in_flight_count = 2;
 const Fences = [in_flight_count]vk.Fence;
-const Commands = [in_flight_count]vk.CommandBuffer;
-const Semaphores = [in_flight_count]vk.Semaphore;
+const Commands = [in_flight_count][sync_count]vk.CommandBuffer;
+const Semaphores = [in_flight_count][sync_count]vk.Semaphore;
 const UniformBuffers = [in_flight_count]vk.Buffer;
 const UniformOffsets = [in_flight_count + 1]u64;
 const StorageImages = [in_flight_count][set_layout.storage_count]vk.Image;
-const StorageViews = [in_flight_count][set_layout.storage_count]vk.ImageView;
+const StorageViews = helper.SimilarMultiArray(StorageImages, vk.ImageView);
 const SetLayouts = [set_layout.layout_count]vk.DescriptorSetLayout;
 const Sets = [in_flight_count][set_layout.layout_count]vk.DescriptorSet;
 const PipelineLayouts = [Stage.all.len]vk.PipelineLayout;
@@ -43,10 +45,8 @@ swapchain_semaphores: std.ArrayList(vk.Semaphore) = .empty,
 next_frame: u1 = 0, // total 2 frames, one is on rendering, one is on recording
 frame_fences: Fences,
 acquiring_semaphore: vk.Semaphore,
-computing_commands: Commands,
-computing_semaphores: Semaphores,
-rendering_commands: Commands,
-rendering_semaphores: Semaphores,
+commands: Commands,
+semaphores: Semaphores,
 
 uniform_memory: vk.DeviceMemory,
 uniform_buffers: UniformBuffers,
@@ -113,12 +113,9 @@ pub fn init() !VulkanContext {
     errdefer for (frame_fences) |f| device.destroyFence(f, null);
     const acquiring_semephore = try device.createSemaphore(&.{}, null);
     errdefer device.destroySemaphore(acquiring_semephore, null);
-    const computing_commands = try _createCommands(device, command_pool);
-    const computing_semaphores = try _createSemaphores(device);
-    errdefer for (computing_semaphores) |s| device.destroySemaphore(s, null);
-    const rendering_commands = try _createCommands(device, command_pool);
-    const rendering_semaphores = try _createSemaphores(device);
-    errdefer for (rendering_semaphores) |s| device.destroySemaphore(s, null);
+    const commands = try _createCommands(device, command_pool);
+    const semaphores = try _createSemaphores(device);
+    errdefer for (semaphores) |ss| for (ss) |s| device.destroySemaphore(s, null);
 
     const uniform_buffers = try _createUniformBuffers(device);
     errdefer for(uniform_buffers) |b| device.destroyBuffer(b, null);
@@ -150,10 +147,8 @@ pub fn init() !VulkanContext {
 
         .frame_fences = frame_fences,
         .acquiring_semaphore = acquiring_semephore,
-        .computing_semaphores = computing_semaphores,
-        .computing_commands = computing_commands,
-        .rendering_semaphores = rendering_semaphores,
-        .rendering_commands = rendering_commands,
+        .semaphores = semaphores,
+        .commands = commands,
 
         .uniform_memory = uniform_memory,
         .uniform_buffers = uniform_buffers,
@@ -184,8 +179,7 @@ pub fn deinit(self: *VulkanContext) void {
 
     defer for (self.frame_fences) |f| self.device.destroyFence(f, null);
     defer self.device.destroySemaphore(self.acquiring_semaphore, null);
-    defer for (self.computing_semaphores) |s| self.device.destroySemaphore(s, null);
-    defer for (self.rendering_semaphores) |s| self.device.destroySemaphore(s, null);
+    defer for (self.semaphores) |ss| for (ss) |s| self.device.destroySemaphore(s, null);
 
     defer self.device.freeMemory(self.uniform_memory, null);
     defer for (self.uniform_buffers) |b| self.device.destroyBuffer(b, null);
@@ -556,14 +550,15 @@ fn _createCommandPool(device: vk.DeviceProxy, queue_family: u32) !vk.CommandPool
     }, null);
 }
 
-fn _createCommands(device: vk.DeviceProxy, pool: vk.CommandPool) ![in_flight_count]vk.CommandBuffer {
-    var commands = std.mem.zeroes([in_flight_count]vk.CommandBuffer);
-    errdefer device.freeCommandBuffers(pool, commands.len, &commands);
+fn _createCommands(device: vk.DeviceProxy, pool: vk.CommandPool) !Commands {
+    const len = in_flight_count * sync_count;
+    var commands = std.mem.zeroes(Commands);
+    errdefer device.freeCommandBuffers(pool, len, @ptrCast(&commands));
     try device.allocateCommandBuffers(&.{
         .level = .primary,
         .command_pool = pool,
-        .command_buffer_count = commands.len,
-    }, &commands);
+        .command_buffer_count = len,
+    }, @ptrCast(&commands));
     return commands;
 }
 
@@ -762,9 +757,11 @@ fn _allocAndBindUniformMemory(device: vk.DeviceProxy, memory_type: u5, buffers: 
 
 fn _createSemaphores(device: vk.DeviceProxy) !Semaphores {
     var semaphores = std.mem.zeroes(Semaphores);
-    errdefer for (semaphores) |s| device.destroySemaphore(s, null);
+    errdefer for (semaphores) |ss| for (ss) |s| device.destroySemaphore(s, null);
 
-    for (&semaphores) |*s| s.* = try device.createSemaphore(&.{}, null);
+    for (&semaphores) |*ss| {
+        for (ss) |*s| s.* = try device.createSemaphore(&.{}, null);
+    }
     return semaphores;
 }
 fn _createFences(device: vk.DeviceProxy) !Fences {
@@ -820,8 +817,7 @@ fn _3dExtent(extent2d: vk.Extent2D) vk.Extent3D {
 
 
 pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
-    log.debug("recreating swapchain...", .{});
-    var timer = if (helper.is_debug) helper.Timer(&.{.total, .swapchain, .swapchain_views, .destroy, .semaphores, .storage_images}, 0).init else void {};
+    var timer = if (helper.is_debug) helper.Timer(&.{.total, .swapchain, .swapchain_views, .destroy, .semaphores}, 0).init else void {};
     if (helper.is_debug) timer.start(.total);
     self.device.deviceWaitIdle() catch |err| log.err("failed to wait device idle: {t}", .{err});
 
@@ -851,136 +847,7 @@ pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
     const old_len = self.swapchain_semaphores.items.len;
     errdefer if (self.swapchain_semaphores.items.len > old_len) _shrinkSemaphores(self.device, &self.swapchain_semaphores, old_len);
     if (self.swapchain_semaphores.items.len < images.len) try _growthSemaphores(helper.allocator, self.device, &self.swapchain_semaphores, images.len);
-    if (helper.is_debug) timer.stop(.swapchain_views);
-
-    if (helper.is_debug) timer.start(.storage_images);
-    if (!std.meta.eql(self.swapchain_info.image_extent, self.storage_extent)) {
-        // create new storage images and views
-        var storage_images = std.mem.zeroes([in_flight_count][set_layout.storage_count]vk.Image);
-        var offsets: [in_flight_count][set_layout.storage_count]u64 = undefined;
-        errdefer for (storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
-
-        var mem_type_mask: u32 = std.math.maxInt(u32);
-        var total_size: u64 = 0;
-        for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |i| {
-            storage_images[f][i] = try self.device.createImage(&.{
-                .image_type = .@"2d",
-                .format = .r32g32b32a32_sfloat,
-                .extent = _3dExtent(self.swapchain_info.image_extent),
-                .mip_levels = 1,
-                .array_layers = 1,
-                .samples = @bitCast(@as(vk.Flags, 1)),
-                .tiling = .optimal,
-                .usage = .{ .storage_bit = true },
-                .sharing_mode = .exclusive,
-                .initial_layout = .undefined,
-            }, null);
-
-            const mem_req = self.device.getImageMemoryRequirements(storage_images[f][i]);
-            total_size += _aligAppendSize(total_size, mem_req.alignment);
-            offsets[f][i] = total_size;
-            total_size += mem_req.size;
-            mem_type_mask &= mem_req.memory_type_bits;
-        };
-
-        var storage_views = std.mem.zeroes([in_flight_count][set_layout.storage_count]vk.ImageView);
-        errdefer for (storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
-
-        const realloc_memory = total_size > self.storage_size or mem_type_mask & (@as(u32, 1) << self.storage_memory_type) == 0;
-        const storage_memory, const memory_type = if (realloc_memory) blk: {
-            // alloc new storage memory
-            const mem_type = try self.memory_type_fiinder.find(mem_type_mask, .{ .device_local_bit = true });
-
-            const memory = try self.device.allocateMemory(&.{
-                .memory_type_index = mem_type,
-                .allocation_size = total_size,
-            }, null);
-            break :blk .{memory, mem_type};
-        } else .{self.storage_memory, self.storage_memory_type};
-        errdefer if (realloc_memory) self.device.freeMemory(storage_memory, null);
-
-        // bind image memory and create new image views
-        for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |i| {
-            try self.device.bindImageMemory(storage_images[f][i], storage_memory, offsets[f][i]);
-            storage_views[f][i] = try _createImageView(self.device, storage_images[f][i], .r32g32b32a32_sfloat);
-        };
-
-        // transite image layout
-        {
-            // create one-time command buffer
-            var command: vk.CommandBufferProxy = .{ .handle = .null_handle, .wrapper = self.device.wrapper };
-            try self.device.allocateCommandBuffers(&.{
-                .command_pool = self.command_pool,
-                .level = .primary,
-                .command_buffer_count = 1,
-            }, @ptrCast(&command.handle));
-            defer self.device.freeCommandBuffers(self.command_pool, 1, @ptrCast(&command.handle));
-
-            // record commands
-            try command.beginCommandBuffer(&.{});
-            for (storage_images) |im1| for (im1) |im| {
-                command.pipelineBarrier2(&.{
-                    .image_memory_barrier_count = 1,
-                    .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
-                        .image = im,
-                        .subresource_range = .{
-                            .aspect_mask = .{ .color_bit = true },
-                            .base_mip_level = 0,
-                            .level_count = 1,
-                            .base_array_layer = 0,
-                            .layer_count = 1,
-                        },
-
-                        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-                        .src_stage_mask = .{ .top_of_pipe_bit = true },
-                        .src_access_mask = .{},
-                        .old_layout = .undefined,
-
-                        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-                        .dst_stage_mask = .{ .compute_shader_bit = true },
-                        .dst_access_mask = .{ .shader_write_bit = true },
-                        .new_layout = .general,
-                    } },
-                });
-            };
-            try command.endCommandBuffer();
-
-            // submit
-            const queue: vk.QueueProxy = .{ .handle = self.queue, .wrapper = self.device.wrapper };
-            try queue.submit(1, &.{ vk.SubmitInfo {
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{command.handle},
-            } }, .null_handle);
-
-            try queue.waitIdle();
-        }
-
-        try self.device.deviceWaitIdle();
-    //=//=//=// vvv No Error Context vvv
-
-        if (realloc_memory) {
-            // free old memory
-            self.device.freeMemory(self.storage_memory, null);
-
-            // store new memory
-            self.storage_memory = storage_memory;
-            self.storage_size = total_size;
-            self.storage_memory_type = memory_type;
-        }
-
-        // destroy images and views
-        for (self.storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
-        for (self.storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
-
-        // store new storage images and views
-        self.storage_extent = self.swapchain_info.image_extent;
-        self.storage_images = storage_images;
-        self.storage_views = storage_views;
-
-        // update descriptor
-        _updateStorageDescriptor(self.device, self.storage_views, self.sets);
-    }
-    if (helper.is_debug) timer.stop(.swapchain_views);
+    if (helper.is_debug) timer.stop(.semaphores);
 
     // destroy extra swapchain semaphores
     if (helper.is_debug) timer.start(.destroy);
@@ -1000,7 +867,138 @@ pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
 
     if (helper.is_debug) timer.stop(.total);
     if (helper.is_debug) timer.report() catch {};
-    log.debug("swapchain recreated", .{});
+}
+
+fn _recreateStorageImages(self: *VulkanContext) !void {
+    var timer = if (helper.is_debug) helper.Timer(&.{.storage_images}, 0).init else void {};
+    if (helper.is_debug) timer.start(.storage_images);
+
+    // create new storage images and views
+    var storage_images = std.mem.zeroes(StorageImages);
+    var offsets: helper.SimilarMultiArray(StorageImages, u64) = undefined;
+    errdefer for (storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
+
+    var mem_type_mask: u32 = std.math.maxInt(u32);
+    var total_size: u64 = 0;
+    for (0 .. helper.arraySize(StorageImages, 0)) |f| for (0 .. helper.arraySize(StorageImages, 1)) |i| {
+        storage_images[f][i] = try self.device.createImage(&.{
+            .image_type = .@"2d",
+            .format = .r32g32b32a32_sfloat,
+            .extent = _3dExtent(self.swapchain_info.image_extent),
+            .mip_levels = 1,
+            .array_layers = 1,
+            .samples = @bitCast(@as(vk.Flags, 1)),
+            .tiling = .optimal,
+            .usage = .{ .storage_bit = true },
+            .sharing_mode = .exclusive,
+            .initial_layout = .undefined,
+        }, null);
+
+        const mem_req = self.device.getImageMemoryRequirements(storage_images[f][i]);
+        total_size += _aligAppendSize(total_size, mem_req.alignment);
+        offsets[f][i] = total_size;
+        total_size += mem_req.size;
+        mem_type_mask &= mem_req.memory_type_bits;
+    };
+
+    var storage_views = std.mem.zeroes(StorageViews);
+    errdefer for (storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
+
+    const realloc_memory = total_size > self.storage_size or mem_type_mask & (@as(u32, 1) << self.storage_memory_type) == 0;
+    const storage_memory, const memory_type = if (realloc_memory) blk: {
+        // alloc new storage memory
+        const mem_type = try self.memory_type_fiinder.find(mem_type_mask, .{ .device_local_bit = true });
+
+        const memory = try self.device.allocateMemory(&.{
+            .memory_type_index = mem_type,
+            .allocation_size = total_size,
+        }, null);
+        break :blk .{memory, mem_type};
+    } else .{self.storage_memory, self.storage_memory_type};
+    errdefer if (realloc_memory) self.device.freeMemory(storage_memory, null);
+
+    // bind image memory and create new image views
+    for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |i| {
+        try self.device.bindImageMemory(storage_images[f][i], storage_memory, offsets[f][i]);
+        storage_views[f][i] = try _createImageView(self.device, storage_images[f][i], .r32g32b32a32_sfloat);
+    };
+
+    // transite image layout
+    {
+        // create one-time command buffer
+        var command: vk.CommandBufferProxy = .{ .handle = .null_handle, .wrapper = self.device.wrapper };
+        try self.device.allocateCommandBuffers(&.{
+            .command_pool = self.command_pool,
+            .level = .primary,
+            .command_buffer_count = 1,
+        }, @ptrCast(&command.handle));
+        defer self.device.freeCommandBuffers(self.command_pool, 1, @ptrCast(&command.handle));
+
+        // record commands
+        try command.beginCommandBuffer(&.{});
+        for (storage_images) |im1| for (im1) |im| {
+            command.pipelineBarrier2(&.{
+                .image_memory_barrier_count = 1,
+                .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
+                    .image = im,
+                    .subresource_range = .{
+                        .aspect_mask = .{ .color_bit = true },
+                        .base_mip_level = 0,
+                        .level_count = 1,
+                        .base_array_layer = 0,
+                        .layer_count = 1,
+                    },
+
+                    .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                    .src_stage_mask = .{ .top_of_pipe_bit = true },
+                    .src_access_mask = .{},
+                    .old_layout = .undefined,
+
+                    .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+                    .dst_stage_mask = .{ .compute_shader_bit = true },
+                    .dst_access_mask = .{ .shader_write_bit = true },
+                    .new_layout = .general,
+                } },
+            });
+        };
+        try command.endCommandBuffer();
+
+        // submit
+        const queue: vk.QueueProxy = .{ .handle = self.queue, .wrapper = self.device.wrapper };
+        try queue.submit(1, &.{ vk.SubmitInfo {
+            .command_buffer_count = 1,
+            .p_command_buffers = &.{command.handle},
+        } }, .null_handle);
+
+        try queue.waitIdle();
+    }
+
+    self.device.deviceWaitIdle() catch |err| log.err("failed to wait device idle: {t}", .{err});
+
+    if (realloc_memory) {
+        // free old memory
+        self.device.freeMemory(self.storage_memory, null);
+
+        // store new memory
+        self.storage_memory = storage_memory;
+        self.storage_size = total_size;
+        self.storage_memory_type = memory_type;
+    }
+
+    // destroy images and views
+    for (self.storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
+    for (self.storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
+
+    // store new storage images and views
+    self.storage_extent = self.swapchain_info.image_extent;
+    self.storage_images = storage_images;
+    self.storage_views = storage_views;
+
+    // update descriptor
+    _updateStorageDescriptor(self.device, self.storage_views, self.sets);
+
+    if (helper.is_debug) timer.stop(.storage_images);
+    if (helper.is_debug) timer.report() catch {};
 }
 
 pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !void {
@@ -1037,10 +1035,8 @@ pub const FrameResouces = struct {
     queue: vk.Queue,
     fence: vk.Fence,
     acquiring_semaphore: vk.Semaphore,
-    computing_command: vk.CommandBuffer,
-    computing_semaphore: vk.Semaphore,
-    rendering_command: vk.CommandBuffer,
-    rendering_semaphore: vk.Semaphore,
+    commands: std.meta.Child(Commands),
+    semaphores: std.meta.Child(Semaphores),
 
     uniform_range: [2]u64,
     uniform_memory: vk.DeviceMemory,
@@ -1068,14 +1064,12 @@ pub const FrameResouces = struct {
         const group_x = std.math.divCeil(u32, self.extent.width, 16) catch unreachable;
         const group_y = std.math.divCeil(u32, self.extent.height, 16) catch unreachable;
 
-        const computing_command: vk.CommandBufferProxy = .{ .handle = self.computing_command, .wrapper = self.device.wrapper };
-        const rendering_command: vk.CommandBufferProxy = .{ .handle = self.rendering_command, .wrapper = self.device.wrapper };
-
         _ = .{info};
 
-        try computing_command.resetCommandBuffer(.{});
-        try computing_command.beginCommandBuffer(&.{});
-        { // init ray
+        const command0 = self.command(0);
+        try command0.resetCommandBuffer(.{});
+        try command0.beginCommandBuffer(&.{});
+        { // init_ray
             const stage = Stage.init_ray;
             const uniform_set = self.sets[0];
             const storage_set = self.sets[1];
@@ -1083,15 +1077,15 @@ pub const FrameResouces = struct {
             const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
             const pipeline = self.pipelines[@intFromEnum(stage)];
 
-            computing_command.bindPipeline(.compute, pipeline);
-            computing_command.bindDescriptorSets(
+            command0.bindPipeline(.compute, pipeline);
+            command0.bindDescriptorSets(
                 .compute, pipeline_layout,
                 0, set_count, &.{uniform_set, storage_set},
                 0, null,
             );
-            computing_command.dispatch(group_x, group_y, 1);
+            command0.dispatch(group_x, group_y, 1);
         }
-        { // iter ray
+        { // iter_ray
             const stage = Stage.iter_ray;
             const uniform_set = self.sets[0];
             const storage_set = self.sets[1];
@@ -1099,20 +1093,89 @@ pub const FrameResouces = struct {
             const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
             const pipeline = self.pipelines[@intFromEnum(stage)];
 
-            computing_command.bindPipeline(.compute, pipeline);
-            computing_command.bindDescriptorSets(
+            command0.bindPipeline(.compute, pipeline);
+            command0.bindDescriptorSets(
                 .compute, pipeline_layout,
                 0, set_count, &.{uniform_set, storage_set},
                 0, null,
             );
-            for (0 .. info.n_iter_call) |_| computing_command.dispatch(group_x, group_y, 1);
+            for (0 .. info.n_iter_call) |_| command0.dispatch(group_x, group_y, 1);
         }
-        try computing_command.endCommandBuffer();
-
-        try rendering_command.resetCommandBuffer(.{});
-        try rendering_command.beginCommandBuffer(&.{});
-        { // render ray
+        { // render_ray
             const stage = Stage.render_ray;
+            const uniform_set = self.sets[0];
+            const storage_set = self.sets[1];
+            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
+            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
+            const pipeline = self.pipelines[@intFromEnum(stage)];
+
+            command0.bindPipeline(.compute, pipeline);
+            command0.bindDescriptorSets(
+                .compute, pipeline_layout,
+                0, set_count, &.{uniform_set, storage_set},
+                0, null,
+            );
+            command0.dispatch(group_x, group_y, 1);
+        }
+        try command0.endCommandBuffer();
+        const submit0: vk.SubmitInfo = .{
+            .command_buffer_count = 1,
+            .p_command_buffers = &.{command0.handle},
+            .signal_semaphore_count = 1,
+            .p_signal_semaphores = &.{self.semaphores[0]},
+        };
+
+        const command1 = self.command(1);
+        try command1.resetCommandBuffer(.{});
+        try command1.beginCommandBuffer(&.{});
+        { // post_process_1
+            const stage = Stage.post_process_1;
+            const uniform_set = self.sets[0];
+            const storage_set = self.sets[1];
+            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
+            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
+            const pipeline = self.pipelines[@intFromEnum(stage)];
+
+            command1.bindPipeline(.compute, pipeline);
+            command1.bindDescriptorSets(
+                .compute, pipeline_layout,
+                0, set_count, &.{uniform_set, storage_set},
+                0, null,
+            );
+            command1.dispatch(group_x, group_y, 1);
+        }
+        try command1.endCommandBuffer();
+        const submit1: vk.SubmitInfo = .{
+            .command_buffer_count = 1,
+            .p_command_buffers = &.{command1.handle},
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = &.{self.semaphores[0]},
+            .p_wait_dst_stage_mask = &.{.{ .compute_shader_bit = true }},
+            .signal_semaphore_count = 1,
+            .p_signal_semaphores = &.{self.semaphores[1]},
+        };
+
+        const command2 = self.command(2);
+        try command2.resetCommandBuffer(.{});
+        try command2.beginCommandBuffer(&.{});
+        { // post_process_2
+            const stage = Stage.post_process_2;
+            const uniform_set = self.sets[0];
+            const storage_set = self.sets[1];
+            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
+            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
+            const pipeline = self.pipelines[@intFromEnum(stage)];
+
+            command2.bindPipeline(.compute, pipeline);
+            command2.bindDescriptorSets(
+                .compute, pipeline_layout,
+                0, set_count, &.{uniform_set, storage_set},
+                0, null,
+            );
+            command2.dispatch(group_x, group_y, 1);
+        }
+        { // final
+            const stage = Stage.final;
             const uniform_set = self.sets[0];
             const storage_set = self.sets[1];
             const surface_set = self.sets[2];
@@ -1120,7 +1183,7 @@ pub const FrameResouces = struct {
             const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
             const pipeline = self.pipelines[@intFromEnum(stage)];
 
-            rendering_command.pipelineBarrier2(&.{
+            command2.pipelineBarrier2(&.{
                 .image_memory_barrier_count = 1,
                 .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
                     .image = self.swapchain_image,
@@ -1144,15 +1207,15 @@ pub const FrameResouces = struct {
                 } },
             });
 
-            rendering_command.bindPipeline(.compute, pipeline);
-            rendering_command.bindDescriptorSets(
+            command2.bindPipeline(.compute, pipeline);
+            command2.bindDescriptorSets(
                 .compute, pipeline_layout,
                 0, set_count, &.{uniform_set, storage_set, surface_set},
                 0, null,
             );
-            rendering_command.dispatch(group_x, group_y, 1);
+            command2.dispatch(group_x, group_y, 1);
 
-            rendering_command.pipelineBarrier2(&.{
+            command2.pipelineBarrier2(&.{
                 .image_memory_barrier_count = 1,
                 .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
                     .image = self.swapchain_image,
@@ -1176,31 +1239,24 @@ pub const FrameResouces = struct {
                 } },
             });
         }
-        try rendering_command.endCommandBuffer();
+        try command2.endCommandBuffer();
+        const submit2: vk.SubmitInfo = .{
+            .command_buffer_count = 1,
+            .p_command_buffers = &.{command2.handle},
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = &.{self.semaphores[1], self.acquiring_semaphore},
+            .p_wait_dst_stage_mask = &.{.{ .compute_shader_bit = true }, .{ .compute_shader_bit = true }},
+            .signal_semaphore_count = 1,
+            .p_signal_semaphores = &.{self.semaphores[2]},
+        };
 
-        try queue.submit(2, &.{
-            vk.SubmitInfo {
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{computing_command.handle},
-                .signal_semaphore_count = 1,
-                .p_signal_semaphores = @ptrCast(&self.computing_semaphore),
-            },
-            vk.SubmitInfo {
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{rendering_command.handle},
-                .wait_semaphore_count = 2,
-                .p_wait_semaphores = &.{self.computing_semaphore, self.acquiring_semaphore},
-                .p_wait_dst_stage_mask = &.{.{ .compute_shader_bit = true }, .{ .compute_shader_bit = true } },
-                .signal_semaphore_count = 1,
-                .p_signal_semaphores = @ptrCast(&self.rendering_semaphore),
-            },
-        }, self.fence);
+        try queue.submit(sync_count, &.{submit0, submit1, submit2}, self.fence);
         const present_result = queue.presentKHR(&.{
             .swapchain_count = 1,
             .p_swapchains = &.{self.swapchain},
             .p_image_indices = &.{self.swapchain_index},
             .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast(&self.rendering_semaphore),
+            .p_wait_semaphores = @ptrCast(&self.semaphores[sync_count - 1]),
         });
 
         if (present_result) |result| switch (result) {
@@ -1209,9 +1265,17 @@ pub const FrameResouces = struct {
             else => unreachable,
         } else |err| return err;
     }
+
+    fn command(self: FrameResouces, index: usize) vk.CommandBufferProxy {
+        return .init(self.commands[index], &device_wrapper);
+    }
 };
 
 pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
+    if (!std.meta.eql(self.swapchain_info.image_extent, self.storage_extent)) {
+        try self._recreateStorageImages();
+    }
+
     const fence = self.frame_fences[self.next_frame];
 
     var wait_count: usize = 0;
@@ -1243,10 +1307,8 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
         .queue = self.queue,
         .fence = fence,
         .acquiring_semaphore = self.acquiring_semaphore,
-        .computing_command = self.computing_commands[self.next_frame],
-        .computing_semaphore = self.computing_semaphores[self.next_frame],
-        .rendering_command = self.rendering_commands[self.next_frame],
-        .rendering_semaphore = self.rendering_semaphores[self.next_frame],
+        .commands = self.commands[self.next_frame],
+        .semaphores = self.semaphores[self.next_frame],
 
         .uniform_range = .{self.uniform_offsets[self.next_frame], self.uniform_offsets[@as(u2, self.next_frame) + 1]},
         .uniform_memory = self.uniform_memory,

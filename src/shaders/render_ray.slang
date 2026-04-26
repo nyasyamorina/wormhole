@@ -14,16 +14,13 @@ RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_compression_tex;
 RWTexture2D<float4> ray_tag_tex;
 
 [vk_binding(3, 1)]
-RWTexture2D<float4> _unused_4;
-
-[vk_binding(0, 2)] [format("rgba8")]
-RWTexture2D<float4> surface;
+RWTexture2D<float4> color_output_tex;
 
 
 [shader("compute")] [numthreads(16, 16, 1)]
 void main(uint3 thread_id: SV_DispatchThreadID) {
     uint2 extent;
-    surface.GetDimensions(extent.x, extent.y);
+    color_output_tex.GetDimensions(extent.x, extent.y);
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
     RayTag ray_tag = bit_cast<RayTag>(ray_tag_tex.Load(thread_id.xy)[0]);
@@ -67,10 +64,11 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
         color = renderCelestialSphere(normalize(ray_direction), freq_scale);
     }
 
-    // crosshair
-    color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
+    if (thread_id.x == extent.x / 2 && thread_id.y == extent.y / 2) {
+        color = {10000.0, 0.0, 0.0};
+    }
 
-    surface.Store(thread_id.xy, float4(color, 1.0));
+    color_output_tex.Store(thread_id.xy, float4(max(0.0, color), 1.0));
 }
 
 
@@ -150,11 +148,8 @@ float3 renderBlackBody(float bright, float temp, float freq_scale) {
     bright *= sqr(sqr(freq_scale));
     temp *= freq_scale;
 
-    //float bb_bright = black_body::luminance(temp);
-    //float3 bb_color = black_body::relColor(temp);
     float3 bb_color = black_body::color(temp);
 
-    //float abs_bright = bright_norm * bb_bright * bright;
     float abs_bright = bright_norm * bright;
     return abs_bright * bb_color;
 }

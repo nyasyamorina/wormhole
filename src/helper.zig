@@ -85,3 +85,22 @@ pub fn Timer(comptime tags: []const @TypeOf(.enum_literal), comptime smooth: f32
         }
     };
 }
+
+
+pub fn SimilarMultiArray(comptime A: type, comptime E: type) type {
+    switch (@typeInfo(A)) {
+        .array => |info| {
+            return @Type(.{ .array = .{
+                .len = info.len,
+                .child = SimilarMultiArray(info.child, E),
+                .sentinel_ptr = null,
+            } });
+        },
+        else => return E,
+    }
+}
+
+pub fn arraySize(comptime A: type, comptime axis: usize) usize {
+    if (axis == 0) return @typeInfo(A).array.len;
+    return arraySize(@typeInfo(A).array.child, axis - 1);
+}
