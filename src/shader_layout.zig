@@ -57,7 +57,6 @@ pub const Uniform = extern struct {
 };
 
 pub const set_layout = struct {
-    pub const layout_count = 3;
     pub const storage_count = 4;
 
     /// index: 0
@@ -101,11 +100,17 @@ pub const set_layout = struct {
     };
 };
 
-pub const pipeline_set_layout_indices = struct {
-    pub const init_ray: []const usize = &.{0, 1};
-    pub const iter_ray: []const usize = &.{0, 1};
-    pub const render_ray: []const usize = &.{0, 1};
-    pub const post_process_1: []const usize = &.{0, 1};
-    pub const post_process_2: []const usize = &.{0, 1};
-    pub const final: []const usize = &.{0, 1, 2};
+pub const set_layout_infos = [_] vk.DescriptorSetLayoutCreateInfo {
+    set_layout.uniform,
+    set_layout.storage,
+    set_layout.surface,
+};
+
+pub const pipeline_set_has_surface = struct {
+    pub const init_ray = false;
+    pub const iter_ray = false;
+    pub const render_ray = false;
+    pub const post_process_1 = false;
+    pub const post_process_2 = false;
+    pub const final = true;
 };
