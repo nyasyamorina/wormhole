@@ -32,6 +32,7 @@ pub const Camera = struct {
     v: float3,
     scale_u: f32,
     scale_v: f32,
+    extent: vk.Extent2D,
 
     pub const InitInfo = struct {
         direction: float3,
@@ -52,19 +53,22 @@ pub const Camera = struct {
             .v = v_n,
             .scale_u = scale,
             .scale_v = scale,
+            .extent = .{ .width = 1, .height = 0 },
         };
     }
 
     pub fn setAspectRatio(self: *Camera, extent: vk.Extent2D) void {
         const aspect_ratio = @as(f32, @floatFromInt(extent.width)) / @as(f32, @floatFromInt(extent.height));
         self.scale_u = aspect_ratio * self.scale_v;
+        self.extent = extent;
     }
 
     pub fn rotate(self: *Camera, move: [2]f32, speed: f32) void {
-        const move_direction = splat(3, move[0]) * self.u - splat(3, move[1]) * self.v;
+        const move_direction = splat(3, move[0] * self.scale_u / @as(f32, @floatFromInt(self.extent.width ))) * self.u
+                                             - splat(3, move[1] * self.scale_v / @as(f32, @floatFromInt(self.extent.height))) * self.v;
 
         const rotate_vector = math.cross(move_direction, self.d);
-        const rotate_angle = speed * math.length(rotate_vector);
+        const rotate_angle = -speed * math.length(rotate_vector);
         const rotate_axis = math.normalize(rotate_vector);
 
         self.d = math.rotate3d(self.d, rotate_axis, rotate_angle);

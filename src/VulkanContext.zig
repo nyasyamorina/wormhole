@@ -1065,6 +1065,8 @@ pub const FrameResouces = struct {
     uniforms: [Stage.all.len]vk.Buffer,
     uniform_offsets: [Stage.all.len]u64,
 
+    storage_images: std.meta.Child(StorageImages),
+
     sets: [set_layout.layout_count - 1 + Stage.all.len]vk.DescriptorSet,
     pipeline_layouts: PipelineLayouts,
     pipelines: Pipelines,
@@ -1098,7 +1100,28 @@ pub const FrameResouces = struct {
         const computing_command: vk.CommandBufferProxy = .{ .handle = self.computing_command, .wrapper = self.device.wrapper };
         const rendering_command: vk.CommandBufferProxy = .{ .handle = self.rendering_command, .wrapper = self.device.wrapper };
 
-        _ = .{info};
+        _ = info;
+        var barriers: [set_layout.storage_count]vk.ImageMemoryBarrier2 = undefined;
+        for (&barriers, self.storage_images) |*b, im| b.* = .{
+            .image = im,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .src_stage_mask = .{ .compute_shader_bit = true },
+            .src_access_mask = .{ .shader_read_bit = true, .shader_write_bit = true },
+            .old_layout = .general,
+
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_stage_mask = .{ .bottom_of_pipe_bit = true },
+            .dst_access_mask = .{},
+            .new_layout = .general,
+        };
 
         try computing_command.resetCommandBuffer(.{});
         try computing_command.beginCommandBuffer(&.{});
@@ -1117,6 +1140,7 @@ pub const FrameResouces = struct {
                 0, null,
             );
             computing_command.dispatch(group_x, group_y, 1);
+            computing_command.pipelineBarrier2(&.{ .image_memory_barrier_count = barriers.len, .p_image_memory_barriers = &barriers });
         }
         try computing_command.endCommandBuffer();
 
@@ -1162,6 +1186,7 @@ pub const FrameResouces = struct {
                 0, null,
             );
             rendering_command.dispatch(group_x, group_y, 1);
+            rendering_command.pipelineBarrier2(&.{ .image_memory_barrier_count = barriers.len, .p_image_memory_barriers = &barriers });
 
             rendering_command.pipelineBarrier2(&.{
                 .image_memory_barrier_count = 1,
@@ -1292,6 +1317,8 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
             for (&offsets) |*o| o.* -= uniform_start;
             break :blk offsets;
         },
+
+        .storage_images = self.storage_images[self.next_frame],
 
         .sets = self.sets[self.next_frame],
         .pipeline_layouts = self.pipeline_layouts,

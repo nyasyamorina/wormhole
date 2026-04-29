@@ -67,7 +67,7 @@ pub fn main() !void {
 
             const mouse_move = vk_ctx.glfw_callback.takeMouseMove();
             if (mouse_move[0] != 0 or mouse_move[1] != 0) {
-                controller.camera.rotate(mouse_move, 0.002);
+                controller.camera.rotate(mouse_move, 1);
             }
 
             const scroll = vk_ctx.glfw_callback.takeScroll();
