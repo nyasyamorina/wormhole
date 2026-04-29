@@ -162,7 +162,7 @@ float3 renderCelestialSphere(float3 direction, float freq_scale) {
     // nebula
     float nebula_bright = nebulaBright(direction);
     float nebula_temp = nebulaTemp(direction);
-    color += renderBlackBody(nebula_bright, nebula_temp, freq_scale);
+    color += 0.5 * renderBlackBody(nebula_bright, nebula_temp, freq_scale);
 
     // tone mapping
     return acesToneMap(color);

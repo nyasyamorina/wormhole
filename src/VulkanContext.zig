@@ -841,16 +841,16 @@ fn _shrinkSemaphores(device: vk.DeviceProxy, semaphores: *std.ArrayList(vk.Semap
 inline fn _3dExtent(extent2d: vk.Extent2D) vk.Extent3D {
     return .{ .width = extent2d.width, .height = extent2d.height, .depth = 1 };
 }
-inline fn _3dOffsets(corner: vk.Offset2D, extent: vk.Extent2D) [2]vk.Offset3D {
+inline fn _3dOffsets(offset: vk.Offset2D, extent: vk.Extent2D) [2]vk.Offset3D {
     return .{
         .{
-            .x = corner.x,
-            .y = corner.y,
+            .x = offset.x,
+            .y = offset.y,
             .z = 0,
         },
         .{
-            .x = corner.x + @as(i32, @intCast(extent.width)),
-            .y = corner.y + @as(i32, @intCast(extent.height)),
+            .x = offset.x + @as(i32, @intCast(extent.width)),
+            .y = offset.y + @as(i32, @intCast(extent.height)),
             .z = 1,
         }
     };
@@ -1247,7 +1247,7 @@ pub const FrameResouces = struct {
         blit_info.src_image = render_im;
         blit_region.src_offsets = _3dOffsets(.{ .x = 0, .y = 0 }, self.extent);
         blit_info.dst_image = mipmap_im;
-        blit_region.dst_offsets = _3dOffsets(mipmapCorner(self.extent, 0), mipmapSize(self.extent, 0));
+        blit_region.dst_offsets = _3dOffsets(mipmapOffset(self.extent, 0), mipmapExtent(self.extent, 0));
         command.blitImage2(&blit_info);
 
         barriers[0].src_stage_mask = .{ .blit_bit = true };
@@ -1255,9 +1255,9 @@ pub const FrameResouces = struct {
         barriers[0].dst_stage_mask = .{ .blit_bit = true };
         barriers[0].dst_access_mask = .{ .transfer_read_bit = true };
         blit_info.src_image = mipmap_im;
-        for (0 .. self.mipmap_levels - 2) |level| {
-            blit_region.src_offsets = _3dOffsets(mipmapCorner(self.extent, @intCast(level)),     mipmapSize(self.extent, @intCast(level)));
-            blit_region.dst_offsets = _3dOffsets(mipmapCorner(self.extent, @intCast(level + 1)), mipmapSize(self.extent, @intCast(level + 1)));
+        for (0 .. self.mipmap_levels - 1) |level| {
+            blit_region.src_offsets = _3dOffsets(mipmapOffset(self.extent, @intCast(level)),     mipmapExtent(self.extent, @intCast(level)));
+            blit_region.dst_offsets = _3dOffsets(mipmapOffset(self.extent, @intCast(level + 1)), mipmapExtent(self.extent, @intCast(level + 1)));
             command.pipelineBarrier2(&.{ .image_memory_barrier_count = 1, .p_image_memory_barriers = barriers[0 .. 1] });
             command.blitImage2(&blit_info);
         }
@@ -1453,29 +1453,29 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
 }
 
 
-fn mipmapCorner(extent: vk.Extent2D, level: u5) vk.Offset2D {
-    const box_corner = mimapBoxCorner(extent, level);
-    const box_size = mimapBoxSize(extent, level);
-    const size = mipmapSize(extent, level);
+fn mipmapOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
+    const box_offset = mimapBoxOffset(extent, level);
+    const box_extent = mimapBoxExtent(extent, level);
+    const mm_extent = mipmapExtent(extent, level);
     return .{
-        .x = box_corner.x + @as(i32, @intCast((box_size.width  - size.width)  / 2)),
-        .y = box_corner.y + @as(i32, @intCast((box_size.height - size.height) / 2)),
+        .x = box_offset.x + @as(i32, @intCast((box_extent.width  - mm_extent.width)  / 2)),
+        .y = box_offset.y + @as(i32, @intCast((box_extent.height - mm_extent.height) / 2)),
     };
 }
-inline fn mipmapSize(extent: vk.Extent2D, level: u5) vk.Extent2D {
+inline fn mipmapExtent(extent: vk.Extent2D, level: u5) vk.Extent2D {
     return .{
         .width = @max(1, extent.width >> (level + 1)),
         .height = @max(1, extent.height >> (level + 1)),
     };
 }
-inline fn mimapBoxCorner(extent: vk.Extent2D, level: u5) vk.Offset2D {
+inline fn mimapBoxOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
     return if (level & 1 == 0)
         .{ .x = @intCast(extent.width >> (level / 2 + 1)), .y = 0 }
     else
         .{ .x = 0, .y = @intCast(extent.height >> ((level + 1) / 2)) }
     ;
 }
-inline fn mimapBoxSize(extent: vk.Extent2D, level: u5) vk.Extent2D {
+inline fn mimapBoxExtent(extent: vk.Extent2D, level: u5) vk.Extent2D {
     return .{
         .width = @max(1, extent.width >> (level / 2 + 1)),
         .height = @max(1, extent.height >> ((level + 1) / 2)),

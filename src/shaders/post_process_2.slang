@@ -8,22 +8,28 @@ ConstantBuffer<Uniform> uniform;
 RWTexture2D<float4, 1> _unused_1;
 
 [vk_binding(1, 1)]
-RWTexture2D<float4, 1> _unused_2;
+RWTexture2D<float4, 1> h_blur_tex;
 
 [vk_binding(2, 1)]
-RWTexture2D<float4, 1> color_input_tex;
+RWTexture2D<float4, 1> mipmap_tex;
 
 [vk_binding(3, 1)]
-RWTexture2D<float4, 1> color_output_tex;
+RWTexture2D<float4, 1> render_tex;
 
 
 [shader("compute")] [numthreads(16, 16, 1)]
 void main(uint3 thread_id: SV_DispatchThreadID) {
     uint2 extent;
-    color_output_tex.GetDimensions(extent.x, extent.y);
+    render_tex.GetDimensions(extent.x, extent.y);
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
-    //float4 color = color_input_tex.Load(thread_id.xy);
+    float3 color = gaussian_blur_coefs[0] * h_blur_tex.Load(thread_id.xy).rgb;
+    for (uint idx = 1; idx < gaussian_blur_coefs.getCount(); idx++) {
+        color += gaussian_blur_coefs[idx] * (
+            h_blur_tex.Load(uint2(thread_id.x, min(extent.y, thread_id.y + idx))).rgb +
+            h_blur_tex.Load(uint2(thread_id.x, max(idx, thread_id.y) - idx,    )).rgb
+        );
+    }
 
-    //color_output_tex.Store(thread_id.xy, color);
+    mipmap_tex.Store(thread_id.xy, float4(color * gaussian_blur_norm, 1.0));
 }

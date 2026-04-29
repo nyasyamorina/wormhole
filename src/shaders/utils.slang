@@ -31,6 +31,29 @@ struct Uniform {
 static const float pi = 3.14159265358979323846264338327950288419716939937510;
 
 
+static const float gaussian_blur_sigma = 0.97;
+static const float gaussian_blur_norm = 0.3989434693560978;
+static const float gaussian_blur_coefs[] = {
+ 1.0,
+ 0.7748374288832494,
+ 0.360447788597821,
+ 0.10066889977289781,
+ 0.01687988414878991,
+ 0.001699279365552657,
+ 0.0001027025646196554,
+};
+
+static const float bloom_coefs[] = {
+    0.5,
+    1.1,
+    1.1,
+    1.15,
+    1.95,
+    1.65,
+    1.15,
+};
+
+
 float2 getScreenCoordinate(uint2 thread_id, uint2 extent) {
     float2 uv_01 = float2(thread_id) / float2(extent);
     return {
@@ -43,29 +66,29 @@ float2 getTextureCoordinate(uint2 thread_id, uint2 extent) {
     return (float2(thread_id) + 0.5) / float2(extent);
 }
 
-uint2 mipmapCorner(uint2 extent, uint level) {
-    uint2 region_corner = mimapBoxCorner(extent, level);
-    uint2 region_size = mimapBoxSize(extent, level);
-    uint2 size = mipmapSize(extent, level);
+uint2 mipmapOffset(uint2 extent, uint level) {
+    uint2 box_offset = mipmapBoxOffset(extent, level);
+    uint2 box_extent = mipmapBoxExtent(extent, level);
+    uint2 mm_extent = mipmapExtent(extent, level);
     return {
-        region_corner.x + (region_size.x - size.x) / 2,
-        region_corner.y + (region_size.y - size.y) / 2,
+        box_offset.x + (box_extent.x - mm_extent.x) / 2,
+        box_offset.y + (box_extent.y - mm_extent.y) / 2,
     };
 }
-uint2 mipmapSize(uint2 extent, uint level) {
+uint2 mipmapExtent(uint2 extent, uint level) {
     return {
         max(1, extent.x >> (level + 1)),
         max(1, extent.y >> (level + 1)),
     };
 }
-uint2 mimapBoxCorner(uint2 extent, uint level) {
+uint2 mipmapBoxOffset(uint2 extent, uint level) {
     if ((level & 1) == 0) {
         return {extent.x >> (level / 2 + 1), 0};
     } else {
         return {0, extent.y >> ((level + 1) / 2)};
     }
 }
-uint2 mimapBoxSize(uint2 extent, uint level) {
+uint2 mipmapBoxExtent(uint2 extent, uint level) {
     return {
         max(1, extent.x >> (level / 2 + 1)),
         max(1, extent.y >> ((level + 1) / 2)),
@@ -171,15 +194,15 @@ float _simplexNoiseKernel(float3 d) {
 }
 
 
-float sqr(float x) {
+T sqr<T>(T x) where T : IArithmetic {
     return x * x;
 }
-float cub(float x) {
+T cub<T>(T x) where T : IArithmetic {
     return x * x * x;
 }
 
 
-float4 cubicInterCoef(float t) {
+float4 cubicInterpolationCoefs(float t) {
     return {
         -t * sqr(t - 1.0),
         (1.0 + 3.0 * t) * sqr(t - 1.0),
