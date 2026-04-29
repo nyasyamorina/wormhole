@@ -100,6 +100,7 @@ pub fn printState(self: Controller, time: i128) !void {
     const r = length(math.spacial(self.frame.position));
     const v = math.length(math.spacial(self.frame.axis_t));
     const dr = math.dot(math.spacial(self.frame.position), math.spacial(self.frame.axis_t)) / r;
+    const da = math.length(math.cross(math.spacial(self.frame.position), math.spacial(self.frame.axis_t))) / r;
     const T = if (r < math.schwarzschild.radius) std.math.nan(f32) else math.schwarzschild.distantTime(self.frame.position);
     const dT = if (r < math.schwarzschild.radius) std.math.nan(f32) else math.schwarzschild.deltaDistantTime(self.frame.position, self.frame.axis_t);
 
@@ -112,10 +113,12 @@ pub fn printState(self: Controller, time: i128) !void {
         ++ "  movement thrust: {:.02} km/s/s" ++ helper.clear_line_and_break
         ++ "  radial position: {:.02} km ({:.05}x rs)" ++ helper.clear_line_and_break
         ++ "  radial seed: {:.02} km/s ({:.05}x rs/s)" ++ helper.clear_line_and_break
+        ++ "  angular speed: {:.02} km/s ({:.05} deg/s)" ++ helper.clear_line_and_break
         ++ "distant perspective:" ++ helper.line_break
         ++ "  time: {:.05} s" ++ helper.clear_line_and_break
         ++ "  speed: {:.02} km/s" ++ helper.clear_line_and_break
         ++ "  radial speed: {:.02} km/s ({:.05}x rs/s)" ++ helper.clear_line_and_break
+        ++ "  angular speed: {:.02} km/s ({:.05} deg/s)" ++ helper.clear_line_and_break
         ++ "maximum simulation error: {:.03}%" ++ helper.clear_line_and_break
         , .{
             math.schwarzschild.mass, math.schwarzschild.mass / math.solar_mass,
@@ -126,10 +129,13 @@ pub fn printState(self: Controller, time: i128) !void {
             self.thrust * math.light_speed,
             r * math.light_speed, r / math.schwarzschild.radius,
             dr * math.light_speed, dr / math.schwarzschild.radius,
+            da * math.light_speed, da / r * (180.0 / std.math.pi),
 
             T,
             v * math.light_speed / dT,
-            dr  * math.light_speed / dT, dr / math.schwarzschild.radius / dT,
+            dr * math.light_speed / dT, dr / math.schwarzschild.radius / dT,
+            da * math.light_speed / dT, da / r * (180.0 / std.math.pi) / dT ,
+
             max_err * 100,
         },
     );

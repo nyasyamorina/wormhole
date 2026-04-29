@@ -226,13 +226,13 @@ pub const schwarzschild = struct {
             }
 
             const direction = normalize(d - svm(dot(d, s) / dot(s, s), s));
-            const time_angle_scale = r * @sqrt(2 * r / schwarzschild.radius);
+            const time_angle_scale = @sqrt(2 * r / schwarzschild.radius);
             var f: Frame = .{
                 .position = p,
                 .axis_x = spacetime(.{1, 0, 0}, 0),
                 .axis_y = spacetime(.{0, 1, 0}, 0),
                 .axis_z = spacetime(.{0, 0, 1}, 0),
-                .axis_t = spacetime(svm(r, direction), time_angle_scale),
+                .axis_t = spacetime(direction, time_angle_scale),
             };
             normalizeAxes(&f);
             return f;

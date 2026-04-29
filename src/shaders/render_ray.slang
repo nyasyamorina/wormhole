@@ -11,10 +11,10 @@ RWTexture2D<float4, 1> ray_tex;
 RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_compression_tex;
 
 [vk_binding(2, 1)]
-RWTexture2D<float4> ray_tag_tex;
+RWTexture2D<float4, 1> ray_tag_tex;
 
 [vk_binding(3, 1)]
-RWTexture2D<float4> color_output_tex;
+RWTexture2D<float4, 1> color_output_tex;
 
 
 [shader("compute")] [numthreads(16, 16, 1)]

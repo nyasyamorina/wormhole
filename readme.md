@@ -50,7 +50,9 @@ When the program is opened in the command line terminal, a series of numerical v
 
 - `radial position`: The distance from the "player" to the singularity,
 
-- `radial seed`: The relative motion of the "player" and the singularity; a positive value indicates the "player" is moving away from the singularity, and a negative value indicates the "player" is moving towards the singularity,
+- `radial speed`: The relative speed of the "player" and the singularity; a positive value indicates the "player" is moving away from the singularity, and a negative value indicates the "player" is moving towards the singularity,
+
+- `angular speed`: The (linear/angular) speed at which the "player" moves around the black hole,
 
 *: The values ​​from the perspective of a distant observer are simply a reinterpretation of the simulation results placed in the Schwarzschild coordinate. In other words, these values ​​are not what the "player" sees or what a distant observer sees, so there is no causal relationship between these values ​​and the "player".
 
@@ -70,11 +72,9 @@ When the program is opened in the command line terminal, a series of numerical v
 
 ### Post-processing
 
-None, except for tone-mapping, which leads to a very obvious "bug": no glare.
+- Bloom: The bloom algorithm is based solely on visual representation, not an accurate physical process. This algorithm is inspired by sonicether's [here](https://www.shadertoy.com/view/lstSRS).
 
-When moving near the speed of light, the light from the direction of travel becomes extremely flashy, realistically causing very strong glare and whitening everything in front. The lack of glare here results in a flat appearance when moving near the speed of light.
-
-No post-processing also results in no "auto exposure", and I didn't add manual exposure either.
+- Automatic Exposure: It's implemented, but not implemented. Unchecking lines 33 and 34 in `final.slang` (see below) will enable automatic exposure.
 
 ### Numerical Simulation
 
@@ -92,21 +92,21 @@ Both player motion and ray tracing utilize numerical solutions to differential e
 
 ## Advanced Usage
 
-The program itself (`schwarzschild.exe` or `schwarzschild`) is insufficient to run, external shader files are required, and user can provide custom shaders. Running the program in an empty folder with no arguments will generate the shaders used here.
+The program itself (`schwarzschild.exe` or `schwarzschild`) is insufficient to run, external shader files are required, and user can provide custom shaders. Running the program in an empty folder with no arguments will generate the shaders used here (see below).
 
 ### Parameters
 
-- `-s="path/to/shaders"` or `--shader="path/to/shaders"`: Specifies the shader folder, defaulting to the current running path. The folder must contain the spirv shader files `init_ray.spv` and `render_ray.spv` (or the slang shader files, see below).
+- `-s="path/to/shaders"` or `--shader="path/to/shaders"`: Specifies the shader folder, the folder must contain the shader files (see below). Defaulting to the current running path.
 
-- `--slangc="path/to/slangc"`: Specifies the slang compiler path. If the shader folder does not contain spirv shader files but does contain the slang shader files `init_ray.slang` and `render_ray.slang`, the program will automatically call slangc to compile slang into spirv.
+- `--slangc="path/to/slangc"`: Specifies the slang compiler path (see below). Default: "slangc",
 
 - `-f=<>` or `--fov=<>`: Specifies the field of view (vertical), in degrees. Default: 60.
 
 - `-p=<>` or `--posotion=<>`: Specifies the initial distance from the black hole singularity. The validity of this value depends on `--init-state`. Unit: Schwarzschild radius. Default: 100.
 
-- `-i=<>` or `--init-state=<>`: Specifies the initial motion state of the "player". Default: `at_rest`.
+- `-i=<>` or `--init-state=<>`: Specifies the initial motion state of the "player". Default: `at_rest`:
 
-    - `at_rest`: Stationary. Initially, the "player" remains relatively stationary with respect to the black hole and gradually accelerates towards it. `--posotion` must be greater than 1.
+    - `at_rest`: Stationary. Initially, the "player" remains relatively stationary with respect to the black hole and gradually accelerates towards it. `--posotion` must be greater than 1,
 
     - `circular_orbit`: Circular orbit. The "player" will orbit the black hole in a stable circular orbit. `--position` must be greater than 1.5.
 
@@ -114,9 +114,106 @@ The program itself (`schwarzschild.exe` or `schwarzschild`) is insufficient to r
 
 - `--simulation-sub-steps=<>`: Controls the precision of motion simulation. Higher values ​​result in higher precision but also higher CPU usage. Default: 100.
 
-- `--n-iter-calls=<>`: Controls the number of times `iter_ray` is called per frame. Generally, this value doesn't need adjustment. Default: 1.
+- `--n-iter-calls=<>`: Controls the number of times `iter_ray` (see below) is called per frame. Generally, this value doesn't need adjustment. Default: 1.
 
-- `--iter-per-call=<>`: Controls the number of ray tracing calculations performed each time `iter_ray` is called. Higher values ​​result in a smaller blue warning area but also higher GPU usage. Default: 500.
+- `--iter-per-call=<>`: Controls the number of ray tracing calculations performed each time `iter_ray` (see below) is called. Higher values ​​result in a smaller blue warning area but also higher GPU usage. Default: 500.
+
+---
+
+## Shaders
+
+### Files and Compilation
+
+Place the following shaders in the shader folder (`--shader`): `init_ray`, `iter_ray`, `render_ray`, `post_process_1`, `post_process_2`, and `final`.
+The program will prioritize using spirv shaders (file extension: `.spv`). If not found, it will look for slang shaders (file extension: `.slang`) and automatically call slangc (`--slangc`) to compile.
+If still not found, the program will generate default slang shader files (will generate an additional file without an entry: `utils.slang`).
+
+### Layout
+
+All shaders can access 1 `uniform` structure and 4 image buffers, and the `final` shader can additionally access the swapchain image (the next display frame).
+
+The uniform and image buffer are written in slang as follows:
+
+```c
+[vk_binding(0, 0)] ConstantBuffer<Uniform> uniform;
+
+[vk_binding(0, 1)] RWTexture2D<float4, 1> tex_0;
+[vk_binding(1, 1)] RWTexture2D<float4, 1> tex_1;
+[vk_binding(2, 1)] RWTexture2D<float4, 1> tex_2;
+[vk_binding(3, 1)] RWTexture2D<float4, 1> tex_3;
+```
+
+The uniform structure is as follows:
+
+```c
+struct SpaceTimeFrame {
+    float4 position;
+    float4 axis_x;
+    float4 axis_y;
+    float4 axis_z;
+    float4 axis_t;
+};
+struct Uniform {
+    SpaceTimeFrame frame;
+    float2 screen_scale;
+    uint iter_per_call;
+    uint mipmap_levels;
+};
+```
+
+The swapchain image is as follows:
+
+```c
+[vk_binding(0, 2)] [format("rgba8")] RWTexture2D<float4> surface;
+```
+
+### Workflow
+
+Although shaders can be customized, the computation (rendering) workflow is fixed. The following is the workflow sequence and default functionality:
+
+1. `init_ray`: Initializes the ray.
+
+2. `iter_ray`: Solves for (traces) the ray; this shader is called `--n-iter-calls` times.
+
+3. `render_ray`: Renders the ray into the `[vk_binding(3, 1)]` image.
+
+4. (Fixed stage) Clears `[vk_binding(2, 1)]` and builds the mipmap of `[vk_binding(3, 1)]` within it.
+
+5. `post_process_1`: Applys a Gaussian blur to the mipmap (horizontally).
+
+6. `post_process_2`: Applys a Gaussian blur to the mipmap (vertically).
+
+7. `final`: Renders the final result into the swapped-chain image.
+
+The mipmap layers start from 0 and have a total of `uniform.mipmap_levels` levels. The offset and size of each level are calculated using the following method:
+
+```c
+uint2 mipmapOffset(uint2 extent, uint level) {
+    uint2 box_offset;
+    if ((level & 1) == 0) {
+        box_offset = {extent.x >> (level / 2 + 1), 0};
+    } else {
+        box_offset = {0, extent.y >> ((level + 1) / 2)};
+    }
+    uint2 box_extent = {
+        max(1, extent.x >> (level / 2 + 1)),
+        max(1, extent.y >> ((level + 1) / 2)),
+    };
+
+    uint2 mm_extent = mipmapExtent(extent, level);
+    return {
+        box_offset.x + (box_extent.x - mm_extent.x) / 2,
+        box_offset.y + (box_extent.y - mm_extent.y) / 2,
+    };
+}
+
+uint2 mipmapExtent(uint2 extent, uint level) {
+    return {
+        max(1, extent.x >> (level + 1)),
+        max(1, extent.y >> (level + 1)),
+    };
+}
+```
 
 ---
 

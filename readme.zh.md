@@ -42,7 +42,8 @@
  - `speed`：“玩家”的速度，
  - `movement thrust`：“玩家”移动时的推力（加速度），
  - `radial position`：“玩家”到洞奇点的距离，
- - `radial seed`：“玩家”与黑洞奇点的相对运动，正值为“玩家”远离奇点，负值为“玩家”靠近奇点，
+ - `radial speed`：“玩家”与黑洞奇点的相对运动，正值为“玩家”远离奇点，负值为“玩家”靠近奇点，
+ - `angular speed`：“玩家”围绕黑洞的（线/角）速度，
 
     *：远距离观察者视角的数值只是把模拟结果放到史瓦西坐标系里重新解释，也就是说这些数值不是“玩家”看到或者远距离观察者看到的，所以这些数值与“玩家”是不存在因果关系的。
 
@@ -62,11 +63,9 @@
 
 ### 后处理
 
-没有，除了一个 tone-maping，而这会导致一个很明显的“错误”：没有炫光。
-在接近光速前进时，前进方向的入射光会变得非常闪光弹，现实来说这会导致非常强烈的炫光并且漂白前方所有景象，
-而这里没有炫光就会导致接近光速移动时看起来很平淡。
+- 炫光：炫光算法是只基于视觉表现做的，并不是准确的物理过程，这个算法灵感来自 sonicether 的[这里](https://www.shadertoy.com/view/lstSRS)，
 
-没有后处理同样会导致没有“自动曝光”，而且我也没加手动曝光。
+- 自动曝光：做了，但是没有做，取消 `final.slang`（见下）里 33 和 34 行就有自动曝光了。
 
 ### 数值模拟
 
@@ -84,15 +83,13 @@
 
 ## 进阶用法
 
-程序本身（`schwarzschild.exe` 或 `schwarzschild`）是不足以运行的，还需要提供外部的着色器文件，由此用户可以提供自定义着色器。在空白文件夹里以无启动参数运行程序会生成这里使用的着色器。
+程序本身（`schwarzschild.exe` 或 `schwarzschild`）是不足以运行的，还需要提供外部的着色器文件，由此用户可以提供自定义着色器。在空白文件夹里以无启动参数运行程序会生成这里使用的着色器（见下）。
 
 ### 参数
 
-- `-s="path/to/shaders"` 或 `--shader="path/to/shaders"`：指定着色器文件夹，默认为当前运行路径，文件夹里必须存在 spirv 着色器文件 `init_ray.spv`、`iter_ray.spv` 和 `render_ray.spv`
-（或 slang 着色器文件，见下）。
+- `-s="path/to/shaders"` 或 `--shader="path/to/shaders"`：指定着色器文件夹，文件夹里必须存在着色器文件（见下），默认为当前运行路径。
 
-- `--slangc="path/to/slangc"`: 指定 slang 编译器路径，如果着色器文件夹内不存在 spirv 着色器文件但存在 slang 着色器文件 `init_ray.slang`、`iter_ray.slang` 和 `render_ray.slang`，
-程序会自动调用 slangc 编译 slang 到 spirv。
+- `--slangc="path/to/slangc"`: 指定 slang 编译器路径（见下），默认值："slangc"。
 
 - `-f=<>` 或 `--fov=<>`: 指定视场角大小（垂直），单位：角度，默认值：60。
 
@@ -100,7 +97,7 @@
 
 - `-i=<>` 或 `--init-state=<>`: 指定一开始“玩家”的运动状态，默认值：`at_rest`：
 
-    - `at_rest`：静止，一开始“玩家”与黑洞保持相对静止，并且逐渐向黑洞加速，`--posotion` 必须大于 1,
+    - `at_rest`：静止，一开始“玩家”与黑洞保持相对静止，并且逐渐向黑洞加速，`--posotion` 必须大于 1，
 
     - `circular_orbit`：圆形轨道，“玩家”将处于一个稳定的圆形轨道上绕着黑洞转圈圈，`--position` 必须大于 1.5。
 
@@ -108,9 +105,106 @@
 
 - `--simulation-sub-steps=<>`：控制运动模拟的精度，数值越大精度越高，但 CPU 使用率也会越高，默认值：100。
 
-- `--n-iter-calls=<>`：控制每帧重复调用 `iter_ray` 的次数，一般来说不需要调整这个数值，默认值：1。
+- `--n-iter-calls=<>`：控制每帧重复调用 `iter_ray`（见下）的次数，一般来说不需要调整这个数值，默认值：1。
 
-- `--iter-per-call=<>`: 控制每次调用 `iter_ray` 时光线追踪的计算次数，数值越大出现蓝色警告的范围越小，但 GPU 使用率也会越高，默认值：500。
+- `--iter-per-call=<>`: 控制每次调用 `iter_ray`（见下）时光线追踪的计算次数，数值越大出现蓝色警告的范围越小，但 GPU 使用率也会越高，默认值：500。
+
+---
+
+## 着色器
+
+### 文件和编译
+
+在 shader 文件夹里（`--shader`）放置 `init_ray`, `iter_ray`， `render_ray`, `post_process_1`, `post_process_2` 和 `final` 这几个着色器，
+程序会优先使用 spirv 着色器（文件后缀 `.spv`），如果不存在则会寻找 slang 着色器（文件后缀 `.slang`）并自动调用 slangc（`--slangc`）编译，
+如果还是找不到，程序会自动生成默认的 slang 着色器文件（自动生成会多一个没有入口函数的 `utils.slang` 文件）。
+
+### 布局
+
+所有着色器都可以访问 1 个 `uniform` 结构体和 4 个图像缓冲区，而 `final` 着色器可以额外访问交换链图像（下一个显示帧）。
+
+uniform 和图像缓冲区用 slang 写为：
+
+```c
+[vk_binding(0, 0)] ConstantBuffer<Uniform> uniform;
+
+[vk_binding(0, 1)] RWTexture2D<float4, 1> tex_0;
+[vk_binding(1, 1)] RWTexture2D<float4, 1> tex_1;
+[vk_binding(2, 1)] RWTexture2D<float4, 1> tex_2;
+[vk_binding(3, 1)] RWTexture2D<float4, 1> tex_3;
+```
+
+其中 uniform 结构为：
+
+```c
+struct SpaceTimeFrame {
+    float4 position;
+    float4 axis_x;
+    float4 axis_y;
+    float4 axis_z;
+    float4 axis_t;
+};
+struct Uniform {
+    SpaceTimeFrame frame;
+    float2 screen_scale;
+    uint iter_per_call;
+    uint mipmap_levels;
+};
+```
+
+交换链图像为：
+
+```c
+[vk_binding(0, 2)] [format("rgba8")] RWTexture2D<float4> surface;
+```
+
+### 流程
+
+尽管着色器是可以自定义的，但是计算（渲染）流程是固定的。以下是流程顺序以及默认的实现功能：
+
+1. `init_ray`：初始光线，
+
+2. `iter_ray`：求解（追踪）光线，这个着色器会被调用 `--n-iter-calls` 次，
+
+3. `render_ray`：渲染光线到 `[vk_binding(3, 1)]` 图像里，
+
+4. （固定阶段）清空 `[vk_binding(2, 1)]` 并在里面构建 `[vk_binding(3, 1)]` 的 mipmap，
+
+5. `post_process_1`：把高斯模糊作用到 mipmap 里（横向），
+
+6. `post_process_2`：把高斯模糊作用到 mipmap 里（竖向），
+
+7. `final`：渲染最终结果到交换链图像里。
+
+其中 mipmap 层数从 0 开始，总共 `uniform.mipmap_levels` 层，每层的坐标偏移及大小由以下方法计算：
+
+```c
+uint2 mipmapOffset(uint2 extent, uint level) {
+    uint2 box_offset;
+    if ((level & 1) == 0) {
+        box_offset = {extent.x >> (level / 2 + 1), 0};
+    } else {
+        box_offset = {0, extent.y >> ((level + 1) / 2)};
+    }
+    uint2 box_extent = {
+        max(1, extent.x >> (level / 2 + 1)),
+        max(1, extent.y >> ((level + 1) / 2)),
+    };
+
+    uint2 mm_extent = mipmapExtent(extent, level);
+    return {
+        box_offset.x + (box_extent.x - mm_extent.x) / 2,
+        box_offset.y + (box_extent.y - mm_extent.y) / 2,
+    };
+}
+
+uint2 mipmapExtent(uint2 extent, uint level) {
+    return {
+        max(1, extent.x >> (level + 1)),
+        max(1, extent.y >> (level + 1)),
+    };
+}
+```
 
 ---
 
