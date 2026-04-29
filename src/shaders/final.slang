@@ -57,13 +57,13 @@ float3 calculateBloom(uint2 thread_id, uint2 extent) {
 float3 getMipmap(uint2 thread_id, uint2 extent, uint level) {
     uint2 offset = mipmapOffset(extent, level);
     uint2 mm_extent = mipmapExtent(extent, level);
-
     float2 sample_pos = float2(thread_id) * float2(mm_extent) / float2(extent) + float2(offset);
+
     uint2 s1 = uint2(floor(sample_pos));
     uint2 s0 = max(1, s1) - 1;
     uint2 s2 = min(extent, s1 + 1);
     uint2 s3 = min(extent, s1 + 2);
-    float2 delta = sample_pos - float2(s1);
+    float2 delta = sample_pos - floor(sample_pos);
     float4 cx = cubicInterpolationCoefs(delta.x);
     float4 cy = cubicInterpolationCoefs(delta.y);
 

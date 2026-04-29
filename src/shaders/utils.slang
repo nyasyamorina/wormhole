@@ -203,12 +203,12 @@ T cub<T>(T x) where T : IArithmetic {
 
 
 float4 cubicInterpolationCoefs(float t) {
-    return {
+    return 0.5 * float4(
         -t * sqr(t - 1.0),
-        (1.0 + 3.0 * t) * sqr(t - 1.0),
-        (4.0 - 3.0 * t) * sqr(t),
+        ( 3.0 * t + 1.0) * sqr(t - 1.0) - (t - 1.0),
+        (-3.0 * t - 2.0) * sqr(t - 1.0) + 2.0,
         (t - 1.0) * sqr(t),
-    };
+    );
 }
 
 
