@@ -11,7 +11,7 @@ RWTexture2D<float4, 1> _unused_1;
 RWTexture2D<float4, 1> _unused_2;
 
 [vk_binding(2, 1)]
-RWTexture2D<float4, 1> _unused_3;
+RWTexture2D<float4, 1> mipmap_tex;
 
 [vk_binding(3, 1)]
 RWTexture2D<float4, 1> color_tex;
@@ -27,10 +27,15 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
     float3 color = color_tex.Load(thread_id.xy).rgb;
-    //color = acesToneMap(color);
+
+    color = acesToneMap(pow(2.0 * color, 1.5));
+    color = pow(color, 1.0 / 1.5);
+    color = clamp(color, 0.0, 1.0);
 
     // crosshair
-    //color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
+    color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
 
-    surface.Store(thread_id.xy, float4(color, 1.0));
+    //surface.Store(thread_id.xy, float4(color, 1.0));
+
+    surface.Store(thread_id.xy, mipmap_tex.Load(thread_id.xy));
 }

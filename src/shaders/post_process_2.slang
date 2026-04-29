@@ -23,7 +23,7 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     color_output_tex.GetDimensions(extent.x, extent.y);
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
-    float4 color = color_input_tex.Load(thread_id.xy);
+    //float4 color = color_input_tex.Load(thread_id.xy);
 
-    color_output_tex.Store(thread_id.xy, color);
+    //color_output_tex.Store(thread_id.xy, color);
 }

@@ -54,10 +54,13 @@ pub const Uniform = extern struct {
     frame: SpaceTimeFrame,
     screen_scale: [2]f32 align(8),
     iter_per_call: u32,
+    mipmap_levels: u32,
 };
 
 pub const set_layout = struct {
     pub const storage_count = 4;
+    pub const storage_mipmap_index = storage_count - 2;
+    pub const storage_render_index = storage_count - 1;
 
     /// index: 0
     pub const uniform: vk.DescriptorSetLayoutCreateInfo = .{

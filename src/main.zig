@@ -128,6 +128,7 @@ pub fn main() !void {
                 .frame = controller.frame.toUniform(),
                 .screen_scale = controller.screen_scale.toUniform(),
                 .iter_per_call = args.iter_per_call.value,
+                .mipmap_levels = resources.mipmap_levels,
             });
 
             resources.drawFrame(.{

@@ -24,6 +24,7 @@ struct Uniform {
     SpaceTimeFrame frame;
     float2 screen_scale;
     uint iter_per_call;
+    uint mipmap_levels;
 };
 
 
@@ -35,6 +36,39 @@ float2 getScreenCoordinate(uint2 thread_id, uint2 extent) {
     return {
         2.0 * uv_01.x - 1.0,
         1.0 - 2.0 * uv_01.y,
+    };
+}
+
+float2 getTextureCoordinate(uint2 thread_id, uint2 extent) {
+    return (float2(thread_id) + 0.5) / float2(extent);
+}
+
+uint2 mipmapCorner(uint2 extent, uint level) {
+    uint2 region_corner = mimapBoxCorner(extent, level);
+    uint2 region_size = mimapBoxSize(extent, level);
+    uint2 size = mipmapSize(extent, level);
+    return {
+        region_corner.x + (region_size.x - size.x) / 2,
+        region_corner.y + (region_size.y - size.y) / 2,
+    };
+}
+uint2 mipmapSize(uint2 extent, uint level) {
+    return {
+        max(1, extent.x >> (level + 1)),
+        max(1, extent.y >> (level + 1)),
+    };
+}
+uint2 mimapBoxCorner(uint2 extent, uint level) {
+    if ((level & 1) == 0) {
+        return {extent.x >> (level / 2 + 1), 0};
+    } else {
+        return {0, extent.y >> ((level + 1) / 2)};
+    }
+}
+uint2 mimapBoxSize(uint2 extent, uint level) {
+    return {
+        max(1, extent.x >> (level / 2 + 1)),
+        max(1, extent.y >> ((level + 1) / 2)),
     };
 }
 
@@ -145,6 +179,16 @@ float cub(float x) {
 }
 
 
+float4 cubicInterCoef(float t) {
+    return {
+        -t * sqr(t - 1.0),
+        (1.0 + 3.0 * t) * sqr(t - 1.0),
+        (4.0 - 3.0 * t) * sqr(t),
+        (t - 1.0) * sqr(t),
+    };
+}
+
+
 /// https://sotrh.github.io/learn-wgpu/intermediate/tutorial13-hdr/#tonemapping
 float3 acesToneMap(float3 color) {
     const float3x3 m1 = {
@@ -201,6 +245,15 @@ namespace cie {
             0.0557101, -0.2040211, 1.0569959,
         };
         return mul(m, xyz);
+    }
+
+    float3 linear_sRGB_to_XYZ(float3 rgb) {
+        const float3x3 m = {
+            0.4124,  0.3576,  0.1805,
+            0.2126,  0.7152,  0.0722,
+            0.0193,  0.1192,  0.9505,
+        };
+        return mul(m, rgb);
     }
 
     static const float3 XYZ_table[33] = {

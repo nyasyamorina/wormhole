@@ -64,10 +64,6 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
         color = renderCelestialSphere(normalize(ray_direction), freq_scale);
     }
 
-    if (thread_id.x == extent.x / 2 && thread_id.y == extent.y / 2) {
-        color = {10000.0, 0.0, 0.0};
-    }
-
     color_output_tex.Store(thread_id.xy, float4(max(0.0, color), 1.0));
 }
 
@@ -87,7 +83,7 @@ float starfieldTemp(float3 direction) {
     return noiseToTemp(clamp(noise * 0.3 + 0.5, 0.0, 1.0));
 }
 
-float nebulaeBright(float3 direction) {
+float nebulaBright(float3 direction) {
     const float scale_1 = 1.0;
     const float amplitude_1 = 0.7;
     const float scale_2 = 5.0;
@@ -97,10 +93,10 @@ float nebulaeBright(float3 direction) {
     const float scale_4 = 20.0;
     const float amplitude_4 = 0.035;
 
-    float nebulae = amplitude_1 * simplexNoise3(direction * scale_1);
+    float nebula = amplitude_1 * simplexNoise3(direction * scale_1);
     float milky_way = 0.8 * (1.0 - 3.2 * sqr(direction.z));
     float mix = 0.15 + 5.0 * sqr(direction.z) - (0.07 * direction.x);
-    float base = clamp(lerp(milky_way, nebulae, min(1.0, mix)), 0.0, 1.0);
+    float base = clamp(lerp(milky_way, nebula, min(1.0, mix)), 0.0, 1.0);
 
     float noise = amplitude_2 * simplexNoise3(direction * scale_2);
     noise += amplitude_3 * simplexNoise3(direction * scale_3);
@@ -112,7 +108,7 @@ float nebulaeBright(float3 direction) {
     return sqr(base * cub(noise_base));
 }
 
-float nebulaeTemp(float3 direction) {
+float nebulaTemp(float3 direction) {
     const float scale = 2.5;
     const float amplitude = 0.25;
     const float shift = -0.1;
@@ -163,10 +159,10 @@ float3 renderCelestialSphere(float3 direction, float freq_scale) {
     float starfield_temp = starfieldTemp(direction);
     color += renderBlackBody(starfield_bright, starfield_temp, freq_scale);
 
-    // nebulae
-    float nebulae_bright = nebulaeBright(direction);
-    float nebulae_temp = nebulaeTemp(direction);
-    color += renderBlackBody(nebulae_bright, nebulae_temp, freq_scale);
+    // nebula
+    float nebula_bright = nebulaBright(direction);
+    float nebula_temp = nebulaTemp(direction);
+    color += renderBlackBody(nebula_bright, nebula_temp, freq_scale);
 
     // tone mapping
     return acesToneMap(color);
