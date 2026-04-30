@@ -125,7 +125,7 @@
 
 uniform 和图像缓冲区用 slang 写为：
 
-```c
+```slang
 [vk_binding(0, 0)] ConstantBuffer<Uniform> uniform;
 
 [vk_binding(0, 1)] RWTexture2D<float4, 1> tex_0;
@@ -136,7 +136,7 @@ uniform 和图像缓冲区用 slang 写为：
 
 其中 uniform 结构为：
 
-```c
+```slang
 struct SpaceTimeFrame {
     float4 position;
     float4 axis_x;
@@ -154,8 +154,15 @@ struct Uniform {
 
 交换链图像为：
 
-```c
+```slang
 [vk_binding(0, 2)] [format("rgba8")] RWTexture2D<float4> surface;
+```
+
+所有着色器都必须有以下入口函数：
+
+```slang
+[shader("compute")] [numthreads(16, 16, 1)]
+void main(uint3 thread_id: SV_DispatchThreadID) { /* ... */ }
 ```
 
 ### 流程
@@ -178,7 +185,7 @@ struct Uniform {
 
 其中 mipmap 层数从 0 开始，总共 `uniform.mipmap_levels` 层，每层的坐标偏移及大小由以下方法计算：
 
-```c
+```slang
 uint2 mipmapOffset(uint2 extent, uint level) {
     uint2 box_offset;
     if ((level & 1) == 0) {
