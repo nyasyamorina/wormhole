@@ -114,9 +114,7 @@ The program itself (`schwarzschild.exe` or `schwarzschild`) is insufficient to r
 
 - `--simulation-sub-steps=<>`: Controls the precision of motion simulation. Higher values ​​result in higher precision but also higher CPU usage. Default: 100.
 
-- `--n-iter-calls=<>`: Controls the number of times `iter_ray` (see below) is called per frame. Generally, this value doesn't need adjustment. Default: 1.
-
-- `--iter-per-call=<>`: Controls the number of ray tracing calculations performed each time `iter_ray` (see below) is called. Higher values ​​result in a smaller blue warning area but also higher GPU usage. Default: 500.
+- `--iter-per-call=<>`: Controls the number of ray tracing calculations performed in `iter_ray` (see below). Higher values ​​result in a more accurate rendering result but also higher GPU usage. Default: 500.
 
 ---
 
@@ -180,7 +178,7 @@ Although shaders can be customized, the computation (rendering) workflow is fixe
 
 1. `init_ray`: Initializes the ray.
 
-2. `iter_ray`: Solves for (traces) the ray; this shader is called `--n-iter-calls` times.
+2. `iter_ray`: Solves for (traces) the ray.
 
 3. `render_ray`: Renders the ray into the `[vk_binding(3, 1)]` image.
 

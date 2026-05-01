@@ -7,7 +7,6 @@ const helper = @import("helper.zig");
 slangc: Option(String, "slangc", null, "slangc"),
 shader_folder: Option(String, null, 's', "shader"),
 iter_per_call: Option(u32, 500, null, "iter-pre-call"),
-n_iter_calls: Option(usize, 1, 'n', "n-iter-calls"),
 fov_y: Option(f32, 60, 'f', "fov"),
 init_state: Option(schwarzschild.frame.InitState, .at_rest, 'i', "init-state"),
 position: Option(f32, 100, 'p', "position"),

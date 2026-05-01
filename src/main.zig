@@ -81,7 +81,7 @@ pub fn main() !void {
             try vk_ctx.recreateSwapchain(extent);
             controller.screen_scale.setAspectRatio(extent);
             // to prevent too many times swapchain recreation
-            std.Thread.sleep(300 * std.time.ns_per_ms);
+            std.Thread.sleep(100 * std.time.ns_per_ms);
         }
 
         if (glfw_cb.takeMouseMove()) |mouse_move| {
@@ -131,12 +131,7 @@ pub fn main() !void {
                 .mipmap_levels = resources.mipmap_levels,
             });
 
-            resources.drawFrame(.{
-                .n_iter_call = args.n_iter_calls.value,
-            }) catch |err| {
-                may_error = err;
-            };
-
+            resources.drawFrame() catch |err| { may_error = err; };
             if (helper.is_debug) timer.stop(.frame);
         }
 

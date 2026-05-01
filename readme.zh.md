@@ -105,9 +105,7 @@
 
 - `--simulation-sub-steps=<>`：控制运动模拟的精度，数值越大精度越高，但 CPU 使用率也会越高，默认值：100。
 
-- `--n-iter-calls=<>`：控制每帧重复调用 `iter_ray`（见下）的次数，一般来说不需要调整这个数值，默认值：1。
-
-- `--iter-per-call=<>`: 控制每次调用 `iter_ray`（见下）时光线追踪的计算次数，数值越大出现蓝色警告的范围越小，但 GPU 使用率也会越高，默认值：500。
+- `--iter-per-call=<>`: 控制每次调用 `iter_ray`（见下）时光线追踪的计算次数，数值越大渲染结果越准确，但 GPU 使用率也会越高，默认值：500。
 
 ---
 
@@ -171,7 +169,7 @@ void main(uint3 thread_id: SV_DispatchThreadID) { /* ... */ }
 
 1. `init_ray`：初始光线，
 
-2. `iter_ray`：求解（追踪）光线，这个着色器会被调用 `--n-iter-calls` 次，
+2. `iter_ray`：求解（追踪）光线，
 
 3. `render_ray`：渲染光线到 `[vk_binding(3, 1)]` 图像里，
 
