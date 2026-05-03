@@ -27,13 +27,15 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
     float3 color = color_tex.Load(thread_id.xy).rgb;
-    color += calculateBloom(thread_id.xy, extent);
+    //color = lerp(color, calculateBloom(thread_id.xy, extent), 0.5);
 
     // auto exposure
-    //float avg_bright = cie::linear_sRGB_to_XYZ(mipmap_tex.Load(mipmapOffset(extent, uniform.mipmap_levels - 1)).rgb).y / gaussian_blur_norm;
-    //color /= 15.0 * max(0.015, avg_bright);
+    const float auto_exp_attenuation = 200.0;
+    float avg_bright = cie::linear_sRGB_to_XYZ(mipmap_tex.Load(mipmapOffset(extent, uniform.mipmap_levels - 1)).rgb).y / sqr(gaussian_blur_norm);
+    float bright_scale = (avg_bright < 0.05 * auto_exp_attenuation) ? avg_bright : (auto_exp_attenuation * log(avg_bright / auto_exp_attenuation + 1.0));
+    color /= max(1e-5, 4.0 * bright_scale);
 
-    color = sqrt(acesToneMap(sqr(1.4 * color)));
+    color = (acesToneMap((color)));
     color = clamp(color, 0.0, 1.0);
 
     // crosshair
@@ -51,7 +53,7 @@ float3 calculateBloom(uint2 thread_id, uint2 extent) {
         bloom += coef * getMipmap(thread_id, extent, uniform.mipmap_levels - l - 1);
         total += coef;
     }
-    return bloom * (1.7 / total);
+    return bloom / total;
 }
 
 float3 getMipmap(uint2 thread_id, uint2 extent, uint level) {

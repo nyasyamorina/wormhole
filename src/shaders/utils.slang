@@ -168,7 +168,6 @@ float simplexNoise3(float3 p) {
     values[3] *= _simplexNoiseKernel(d[3]);
     return normalization * (values[0] + values[1] + values[2] + values[3]);
 }
-
 int3 _grad3(uint3 v) {
     static int3 grads[12] = {
         {-1, -1, 0}, {-1, 1, 0}, {1, -1, 0}, {1, 1, 0},
@@ -179,14 +178,12 @@ int3 _grad3(uint3 v) {
     uint idx = _hashInt(v.x + _hashInt(v.y + _hashInt(v.z)));
     return grads[idx % 12];
 }
-
 uint _hashInt(uint x) {
     const uint m = 0x45D9F3B;
     x = ((x >> 16) ^ x) * m;
     x = ((x >> 16) ^ x) * m;
     return (x >> 16) ^ x;
 }
-
 float _simplexNoiseKernel(float3 d) {
     const float kernel_size_sqr = 0.6; // 0.5 ensures no discontinuities, 0.6 may increase visual quality
     return sqr(sqr(max(0.0, kernel_size_sqr - dot(d, d))));
