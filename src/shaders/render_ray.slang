@@ -62,11 +62,18 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
 
 
 float starfieldBright(float3 direction) {
-    const float scale = 200.0;
+    const float scale1 = 200.0;
+    const float amplitude_1 = 0.45;
+    const float scale2 = 150.0;
+    const float amplitude_2 = 0.45;
+    const float scale3 = 100.0;
+    const float amplitude_3 = 0.3;
 
-    float noise = simplexNoise3(direction * scale);
-    float base = clamp(noise * 0.5 + 0.5, 0.0, 1.0);
-    return 1.2 * sqr(cub(cub(base)));
+    float noise = amplitude_1 * simplexNoise3(direction * scale1);
+    noise += amplitude_2 * simplexNoise3(direction * scale2);
+    noise += amplitude_3 * simplexNoise3(direction * scale3);
+    float base = max(0.0, noise * 0.5 + 0.5);
+    return 1.2 * cub(cub(base));
 }
 
 float starfieldTemp(float3 direction) {
