@@ -74,7 +74,11 @@ When the program is opened in the command line terminal, a series of numerical v
 
 - Bloom: The bloom algorithm is based solely on visual representation, not an accurate physical process. This algorithm is inspired by sonicether's [here](https://www.shadertoy.com/view/lstSRS).
 
-- Automatic Exposure: It's implemented, but not implemented. Unchecking lines 33 and 34 in `final.slang` (see below) will enable automatic exposure.
+- Automatic Exposure: It's implemented.
+
+    Note that when moving at near the speed of light, the brightness of the entire scene can span multiple orders of magnitude, the bloom and auto exposure implemented here don't handle this situation very well.
+
+    **Request a better bloom and auto exposure algorithm**
 
 ### Numerical Simulation
 
