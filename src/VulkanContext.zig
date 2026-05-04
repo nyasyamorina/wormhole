@@ -1100,7 +1100,7 @@ fn _recreateStorageImages(self: *VulkanContext) !void {
 
     self.device.deviceWaitIdle() catch |err| log.err("failed to wait device idle: {t}", .{err});
 
-    const mipmap_levels = std.math.log2_int(u32, @max(extent.width, extent.height));
+    const mipmap_levels: u5 = @intCast(std.math.log2_int_ceil(u32, @max(extent.width, extent.height)));
     try _recordGenerateMipmapCommands(self.generate_mipmap_commands, storage_images, extent, mipmap_levels);
 
     if (realloc_memory) {
@@ -1372,14 +1372,14 @@ fn mipmapOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
     const box_extent = mimapBoxExtent(extent, level);
     const mm_extent = mipmapExtent(extent, level);
     return .{
-        .x = box_offset.x + @as(i32, @intCast((box_extent.width  - mm_extent.width)  / 2)),
-        .y = box_offset.y + @as(i32, @intCast((box_extent.height - mm_extent.height) / 2)),
+        .x = box_offset.x + @as(i32, @intCast((box_extent.width  -| mm_extent.width)  / 2)),
+        .y = box_offset.y + @as(i32, @intCast((box_extent.height -| mm_extent.height) / 2)),
     };
 }
 inline fn mipmapExtent(extent: vk.Extent2D, level: u5) vk.Extent2D {
     return .{
-        .width = @max(1, extent.width >> (level + 1)),
-        .height = @max(1, extent.height >> (level + 1)),
+        .width  = ((extent.width  - 1) >> (level + 1)) + 1,
+        .height = ((extent.height - 1) >> (level + 1)) + 1,
     };
 }
 inline fn mimapBoxOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
@@ -1391,7 +1391,7 @@ inline fn mimapBoxOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
 }
 inline fn mimapBoxExtent(extent: vk.Extent2D, level: u5) vk.Extent2D {
     return .{
-        .width = @max(1, extent.width >> (level / 2 + 1)),
-        .height = @max(1, extent.height >> ((level + 1) / 2)),
+        .width  = (extent.width  - 1) >> ((level / 2) + 1) + 1,
+        .height = (extent.height - 1) >> ((level + 1) / 2) + 1,
     };
 }

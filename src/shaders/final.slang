@@ -30,8 +30,12 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     color = lerp(color, calculateBloom(thread_id.xy, extent), 0.5);
 
     // auto exposure
-    float avg_bright = cie::linear_sRGB_to_XYZ(mipmap_tex.Load(mipmapOffset(extent, uniform.mipmap_levels - 1)).rgb).y / sqr(gaussian_blur_norm);
-    color /= max(1e-7, 4.0 * avg_bright);
+    // TODO: more accurate average brightness,
+    // when the texture size is not a power of 2, the mip samples on the texture are not average value.
+    const float blur_unnorm = 1.0 / sqr(gaussian_blur_norm);
+    uint2 avg_bright_offset = mipmapOffset(extent, uniform.mipmap_levels - 1);
+    float avg_bright = blur_unnorm * cie::linear_sRGB_to_XYZ(mipmap_tex.Load(avg_bright_offset).rgb).y;
+    color /= max(1e-7, 1.8 * avg_bright);
 
     color = acesToneMap(color);
     color = clamp(color, 0.0, 1.0);
@@ -46,9 +50,9 @@ float3 calculateBloom(uint2 thread_id, uint2 extent) {
     float3 bloom = 0.0;
     float total = 0.0;
     for (uint l = 0; l < bloom_coefs.getCount(); l++) {
+        if (l >= uniform.mipmap_levels) break;
         float coef = bloom_coefs[l];
-        if (coef == 0.0 || l >= uniform.mipmap_levels) continue;
-        bloom += coef * getMipmap(thread_id, extent, uniform.mipmap_levels - l - 1);
+        bloom += coef * getMipmap(thread_id, extent, l);
         total += coef;
     }
     return bloom / total;
@@ -58,6 +62,7 @@ float3 getMipmap(uint2 thread_id, uint2 extent, uint level) {
     uint2 offset = mipmapOffset(extent, level);
     uint2 mm_extent = mipmapExtent(extent, level);
     float2 sample_pos = float2(thread_id) * float2(mm_extent) / float2(extent) + float2(offset);
+    sample_pos -= 0.5;
 
     uint2 s1 = uint2(floor(sample_pos));
     uint2 s0 = max(1, s1) - 1;

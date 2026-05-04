@@ -1,10 +1,3 @@
-struct Camera {
-    /// normalized
-    float3 direction;
-    float3 u;
-    float3 v;
-};
-
 /// the local space-time frame around `position`,
 /// all axes all orthogonal, and normalized to having space-time length 1 (temporal) or -1 (spacial).
 struct SpaceTimeFrame {
@@ -42,14 +35,16 @@ static const float gaussian_blur_coefs[] = {
     0.0001027025646196554,
 };
 
+/// from "https://www.shadertoy.com/view/lstSRS"
 static const float bloom_coefs[] = {
-    0.5,
-    1.1,
-    1.1,
-    1.15,
-    1.95,
-    1.65,
-    1.15,
+    1.0,
+    1.0,
+    1.0,
+    1.8,
+    1.5,
+    1.0,
+    1.5,
+    1.0,
 };
 
 
@@ -75,10 +70,7 @@ uint2 mipmapOffset(uint2 extent, uint level) {
     };
 }
 uint2 mipmapExtent(uint2 extent, uint level) {
-    return {
-        max(1, extent.x >> (level + 1)),
-        max(1, extent.y >> (level + 1)),
-    };
+    return ((extent - 1) >> (level + 1)) + 1;
 }
 uint2 mipmapBoxOffset(uint2 extent, uint level) {
     if ((level & 1) == 0) {
@@ -89,8 +81,8 @@ uint2 mipmapBoxOffset(uint2 extent, uint level) {
 }
 uint2 mipmapBoxExtent(uint2 extent, uint level) {
     return {
-        max(1, extent.x >> (level / 2 + 1)),
-        max(1, extent.y >> ((level + 1) / 2)),
+        (extent.x - 1) >> ((level / 2) + 1) + 1,
+        (extent.y - 1) >> ((level + 1) / 2) + 1,
     };
 }
 
@@ -208,7 +200,7 @@ float4 cubicInterpolationCoefs(float t) {
 }
 
 
-/// https://sotrh.github.io/learn-wgpu/intermediate/tutorial13-hdr/#tonemapping
+/// from "https://sotrh.github.io/learn-wgpu/intermediate/tutorial13-hdr/#tonemapping"
 float3 acesToneMap(float3 color) {
     const float3x3 m1 = {
         0.59719, 0.07600, 0.02840,
