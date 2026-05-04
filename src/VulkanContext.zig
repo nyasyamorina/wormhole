@@ -57,6 +57,7 @@ uniform_memory: vk.DeviceMemory,
 uniform_buffers: UniformBuffers,
 uniform_offsets: UniformOffsets,
 
+brightness_scale: f32 = 1,
 mipmap_levels: u5 = 0,
 storage_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 storage_size: u64 = 0,
@@ -465,6 +466,7 @@ fn _pickPhysicalDevice(allocator: std.mem.Allocator, instance: vk.InstanceProxy,
     next_handle: for (handles) |p| {
         const prop = instance.getPhysicalDeviceFormatProperties(p, storage_format);
         if (!prop.optimal_tiling_features.sampled_image_filter_linear_bit) continue;
+        if (!prop.optimal_tiling_features.blit_src_bit or !prop.optimal_tiling_features.blit_dst_bit) continue;
 
         var features: @TypeOf(target_features) = .{};
         instance.getPhysicalDeviceFeatures2(p, features.link());
@@ -587,7 +589,7 @@ fn _recordGenerateMipmapCommands(commands: SecondaryCommands, images: StorageIma
         const mipmap_im = ims[set_layout.storage_mipmap_index];
         const render_im = ims[set_layout.storage_render_index];
 
-        const barrier: vk.ImageMemoryBarrier2 = .{
+        var barrier: vk.ImageMemoryBarrier2 = .{
             .image = mipmap_im,
             .subresource_range = .{
                 .aspect_mask = .{ .color_bit = true },
@@ -656,13 +658,29 @@ fn _recordGenerateMipmapCommands(commands: SecondaryCommands, images: StorageIma
         blit_region.dst_offsets = _3dOffsets(mipmapOffset(extent, 0), mipmapExtent(extent, 0));
         command.blitImage2(&blit_info);
 
+        // if the extent of src is odd, blit sampling is not uniform for all src samples, this will changes the average brightness,
+        // keeping the blit sampling uniform by padding the extent of src to even, and the average brightness will only be scaled by a constant.
         blit_info.src_image = mipmap_im;
         for (0 .. levels - 1) |level| {
-            blit_region.src_offsets = _3dOffsets(mipmapOffset(extent, @intCast(level)),     mipmapExtent(extent, @intCast(level)));
-            blit_region.dst_offsets = _3dOffsets(mipmapOffset(extent, @intCast(level + 1)), mipmapExtent(extent, @intCast(level + 1)));
+            blit_region.src_offsets = _3dOffsets(bmipmapOffset(extent, @intCast(level),     true),  bmipmapExtent(extent, @intCast(level),     true));
+            blit_region.dst_offsets = _3dOffsets(bmipmapOffset(extent, @intCast(level + 1), false), bmipmapExtent(extent, @intCast(level + 1), false));
             command.pipelineBarrier2(&.{ .image_memory_barrier_count = 1, .p_image_memory_barriers = @ptrCast(&barrier) });
             command.blitImage2(&blit_info);
         }
+
+        // the blttings above are for correct average brightness, and the process cannot generate the correct mipmaps,
+        // the following process can generate mipmmaps, but still suffer from the un-uniform blit sampling.
+        //barrier.src_access_mask = .{ .transfer_read_bit = true, .transfer_write_bit = true };
+        //barrier.dst_access_mask = .{ .transfer_read_bit = true, .transfer_write_bit = true };
+        //command.pipelineBarrier2(&.{ .image_memory_barrier_count = 1, .p_image_memory_barriers = @ptrCast(&barrier) });
+        //barrier.src_access_mask = .{ .transfer_write_bit = true };
+        //barrier.dst_access_mask = .{ .transfer_read_bit = true };
+        //for (0 .. levels - 2) |level| {
+        //    blit_region.src_offsets = _3dOffsets(mipmapOffset(extent, @intCast(level)),     mipmapExtent(extent, @intCast(level)));
+        //    blit_region.dst_offsets = _3dOffsets(mipmapOffset(extent, @intCast(level + 1)), mipmapExtent(extent, @intCast(level + 1)));
+        //    command.pipelineBarrier2(&.{ .image_memory_barrier_count = 1, .p_image_memory_barriers = @ptrCast(&barrier) });
+        //    command.blitImage2(&blit_info);
+        //}
 
         try command.endCommandBuffer();
     }
@@ -1122,6 +1140,7 @@ fn _recreateStorageImages(self: *VulkanContext) !void {
     self.storage_images = storage_images;
     self.storage_views = storage_views;
     self.mipmap_levels = mipmap_levels;
+    self.brightness_scale = bmipmapScaler(extent);
 
     // update descriptor
     _updateStorageDescriptor(self.device, self.storage_views, self.sets);
@@ -1372,8 +1391,8 @@ fn mipmapOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
     const box_extent = mimapBoxExtent(extent, level);
     const mm_extent = mipmapExtent(extent, level);
     return .{
-        .x = box_offset.x + @as(i32, @intCast((box_extent.width  -| mm_extent.width)  / 2)),
-        .y = box_offset.y + @as(i32, @intCast((box_extent.height -| mm_extent.height) / 2)),
+        .x = box_offset.x + @as(i32, @intCast((box_extent.width  - mm_extent.width)  / 2)),
+        .y = box_offset.y + @as(i32, @intCast((box_extent.height - mm_extent.height) / 2)),
     };
 }
 inline fn mipmapExtent(extent: vk.Extent2D, level: u5) vk.Extent2D {
@@ -1391,7 +1410,55 @@ inline fn mimapBoxOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
 }
 inline fn mimapBoxExtent(extent: vk.Extent2D, level: u5) vk.Extent2D {
     return .{
-        .width  = (extent.width  - 1) >> ((level / 2) + 1) + 1,
-        .height = (extent.height - 1) >> ((level + 1) / 2) + 1,
+        .width  = ((extent.width  - 1) >> ((level / 2) + 1)) + 1,
+        .height = ((extent.height - 1) >> ((level + 1) / 2)) + 1,
     };
+}
+
+fn bmipmapOffset(extent: vk.Extent2D, level: u5, src: bool) vk.Offset2D {
+    var box_offset = mimapBoxOffset(extent, level);
+    var box_extent = mimapBoxExtent(extent, level);
+    var mm_extent = mipmapExtent(extent, level);
+    if (src and mm_extent.width  & 1 == 1) {
+        box_offset.x -= 1;
+        box_extent.width += 1;
+        mm_extent.width += 1;
+    }
+    if (src and mm_extent.height & 1 == 1) {
+        box_offset.y -= 1;
+        box_extent.height += 1;
+        mm_extent.height += 1;
+    }
+    return .{
+        .x = box_offset.x + @as(i32, @intCast((box_extent.width  - mm_extent.width)  / 2)),
+        .y = box_offset.y + @as(i32, @intCast((box_extent.height - mm_extent.height) / 2)),
+    };
+}
+fn bmipmapExtent(extent: vk.Extent2D, level: u5, src: bool) vk.Extent2D {
+    var mm_extent = mipmapExtent(extent, level);
+    if (src and mm_extent.width  & 1 == 1) mm_extent.width  += 1;
+    if (src and mm_extent.height & 1 == 1) mm_extent.height += 1;
+    return mm_extent;
+}
+fn bmipmapScaler(extent: vk.Extent2D) f32 {
+    var scale: f32 = 1;
+    var w = extent.width / 2;
+    while (w > 1) {
+        if (w & 1 == 1) {
+            scale *= @as(f32, @floatFromInt(w + 1)) / @as(f32, @floatFromInt(w));
+            w = (w + 1) / 2;
+        } else {
+            w = w / 2;
+        }
+    }
+    var h = extent.width / 2;
+    while (h > 1) {
+        if (h & 1 == 1) {
+            scale *= @as(f32, @floatFromInt(h + 1)) / @as(f32, @floatFromInt(h));
+            h = (h + 1) / 2;
+        } else {
+            h = h / 2;
+        }
+    }
+    return scale;
 }

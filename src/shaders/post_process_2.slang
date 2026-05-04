@@ -31,5 +31,13 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
         );
     }
 
+    // the highest level mip (1 pixel) is the average color, make this value to the target brightness of the scence.
+    uint2 avg_bright_offset = mipmapOffset(extent, uniform.mipmap_levels - 1);
+    if (thread_id.x == avg_bright_offset.x && thread_id.y == avg_bright_offset.y) {
+        const float blur_unnorm = 1.0 / sqr(gaussian_blur_norm);
+        color *= blur_unnorm * uniform.brightness_scale;
+        color = cie::linear_sRGB_to_XYZ(color);
+    }
+
     mipmap_tex.Store(thread_id.xy, float4(color * gaussian_blur_norm, 1.0));
 }

@@ -158,6 +158,7 @@ struct SpaceTimeFrame {
 struct Uniform {
     SpaceTimeFrame frame;
     float2 screen_scale;
+    float brightness_scale;
     uint iter_per_call;
     uint mipmap_levels;
 };

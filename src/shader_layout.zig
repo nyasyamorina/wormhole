@@ -53,6 +53,7 @@ pub const SpaceTimeFrame = extern struct {
 pub const Uniform = extern struct {
     frame: SpaceTimeFrame,
     screen_scale: [2]f32 align(8),
+    brightness_scale: f32,
     iter_per_call: u32,
     mipmap_levels: u32,
 };

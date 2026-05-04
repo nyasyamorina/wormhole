@@ -127,6 +127,7 @@ pub fn main() !void {
             try resources.setUniform(.{
                 .frame = controller.frame.toUniform(),
                 .screen_scale = controller.screen_scale.toUniform(),
+                .brightness_scale = vk_ctx.brightness_scale,
                 .iter_per_call = args.iter_per_call.value,
                 .mipmap_levels = resources.mipmap_levels,
             });

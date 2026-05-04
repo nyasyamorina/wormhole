@@ -16,6 +16,7 @@ struct SpaceTimeFrame {
 struct Uniform {
     SpaceTimeFrame frame;
     float2 screen_scale;
+    float brightness_scale;
     uint iter_per_call;
     uint mipmap_levels;
 };
@@ -81,8 +82,8 @@ uint2 mipmapBoxOffset(uint2 extent, uint level) {
 }
 uint2 mipmapBoxExtent(uint2 extent, uint level) {
     return {
-        (extent.x - 1) >> ((level / 2) + 1) + 1,
-        (extent.y - 1) >> ((level + 1) / 2) + 1,
+        ((extent.x - 1) >> ((level / 2) + 1)) + 1,
+        ((extent.y - 1) >> ((level + 1) / 2)) + 1,
     };
 }
 
