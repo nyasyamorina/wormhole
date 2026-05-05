@@ -197,8 +197,8 @@ uint2 mipmapOffset(uint2 extent, uint level) {
         box_offset = {0, extent.y >> ((level + 1) / 2)};
     }
     uint2 box_extent = {
-        max(1, extent.x >> (level / 2 + 1)),
-        max(1, extent.y >> ((level + 1) / 2)),
+        ((extent.x - 1) >> ((level / 2) + 1)) + 1,
+        ((extent.y - 1) >> ((level + 1) / 2)) + 1,
     };
 
     uint2 mm_extent = mipmapExtent(extent, level);
@@ -209,10 +209,7 @@ uint2 mipmapOffset(uint2 extent, uint level) {
 }
 
 uint2 mipmapExtent(uint2 extent, uint level) {
-    return {
-        max(1, extent.x >> (level + 1)),
-        max(1, extent.y >> (level + 1)),
-    };
+    return ((extent - 1) >> (level + 1)) + 1;
 }
 ```
 
