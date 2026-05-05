@@ -6,6 +6,9 @@ pub const Stage = enum {
     init_ray,
     iter_ray,
     render_ray,
+    post_process_1,
+    post_process_2,
+    final,
 
     pub const all = std.meta.tags(Stage);
 
@@ -50,12 +53,15 @@ pub const SpaceTimeFrame = extern struct {
 pub const Uniform = extern struct {
     frame: SpaceTimeFrame,
     screen_scale: [2]f32 align(8),
+    brightness_scale: f32,
     iter_per_call: u32,
+    mipmap_levels: u32,
 };
 
 pub const set_layout = struct {
-    pub const layout_count = 3;
     pub const storage_count = 4;
+    pub const storage_mipmap_index = storage_count - 2;
+    pub const storage_render_index = storage_count - 1;
 
     /// index: 0
     pub const uniform: vk.DescriptorSetLayoutCreateInfo = .{
@@ -98,8 +104,17 @@ pub const set_layout = struct {
     };
 };
 
-pub const pipeline_set_layout_indices = struct {
-    pub const init_ray: []const usize = &.{0, 1};
-    pub const iter_ray: []const usize = &.{0, 1};
-    pub const render_ray: []const usize = &.{0, 1, 2};
+pub const set_layout_infos = [_] vk.DescriptorSetLayoutCreateInfo {
+    set_layout.uniform,
+    set_layout.storage,
+    set_layout.surface,
+};
+
+pub const pipeline_set_has_surface = struct {
+    pub const init_ray = false;
+    pub const iter_ray = false;
+    pub const render_ray = false;
+    pub const post_process_1 = false;
+    pub const post_process_2 = false;
+    pub const final = true;
 };

@@ -1,10 +1,3 @@
-struct Camera {
-    /// normalized
-    float3 direction;
-    float3 u;
-    float3 v;
-};
-
 /// the local space-time frame around `position`,
 /// all axes all orthogonal, and normalized to having space-time length 1 (temporal) or -1 (spacial).
 struct SpaceTimeFrame {
@@ -23,11 +16,37 @@ struct SpaceTimeFrame {
 struct Uniform {
     SpaceTimeFrame frame;
     float2 screen_scale;
+    float brightness_scale;
     uint iter_per_call;
+    uint mipmap_levels;
 };
 
 
 static const float pi = 3.14159265358979323846264338327950288419716939937510;
+
+
+static const float gaussian_blur_norm = 0.3989434693560978;
+static const float gaussian_blur_coefs[] = {
+    1.0,
+    0.7748374288832494,
+    0.360447788597821,
+    0.10066889977289781,
+    0.01687988414878991,
+    0.001699279365552657,
+    0.0001027025646196554,
+};
+
+/// from "https://www.shadertoy.com/view/lstSRS"
+static const float bloom_coefs[] = {
+    1.0,
+    1.0,
+    1.0,
+    1.8,
+    1.5,
+    1.0,
+    1.5,
+    1.0,
+};
 
 
 float2 getScreenCoordinate(uint2 thread_id, uint2 extent) {
@@ -35,6 +54,36 @@ float2 getScreenCoordinate(uint2 thread_id, uint2 extent) {
     return {
         2.0 * uv_01.x - 1.0,
         1.0 - 2.0 * uv_01.y,
+    };
+}
+
+float2 getTextureCoordinate(uint2 thread_id, uint2 extent) {
+    return (float2(thread_id) + 0.5) / float2(extent);
+}
+
+uint2 mipmapOffset(uint2 extent, uint level) {
+    uint2 box_offset = mipmapBoxOffset(extent, level);
+    uint2 box_extent = mipmapBoxExtent(extent, level);
+    uint2 mm_extent = mipmapExtent(extent, level);
+    return {
+        box_offset.x + (box_extent.x - mm_extent.x) / 2,
+        box_offset.y + (box_extent.y - mm_extent.y) / 2,
+    };
+}
+uint2 mipmapExtent(uint2 extent, uint level) {
+    return ((extent - 1) >> (level + 1)) + 1;
+}
+uint2 mipmapBoxOffset(uint2 extent, uint level) {
+    if ((level & 1) == 0) {
+        return {extent.x >> (level / 2 + 1), 0};
+    } else {
+        return {0, extent.y >> ((level + 1) / 2)};
+    }
+}
+uint2 mipmapBoxExtent(uint2 extent, uint level) {
+    return {
+        ((extent.x - 1) >> ((level / 2) + 1)) + 1,
+        ((extent.y - 1) >> ((level + 1) / 2)) + 1,
     };
 }
 
@@ -112,7 +161,6 @@ float simplexNoise3(float3 p) {
     values[3] *= _simplexNoiseKernel(d[3]);
     return normalization * (values[0] + values[1] + values[2] + values[3]);
 }
-
 int3 _grad3(uint3 v) {
     static int3 grads[12] = {
         {-1, -1, 0}, {-1, 1, 0}, {1, -1, 0}, {1, 1, 0},
@@ -123,29 +171,37 @@ int3 _grad3(uint3 v) {
     uint idx = _hashInt(v.x + _hashInt(v.y + _hashInt(v.z)));
     return grads[idx % 12];
 }
-
 uint _hashInt(uint x) {
     const uint m = 0x45D9F3B;
     x = ((x >> 16) ^ x) * m;
     x = ((x >> 16) ^ x) * m;
     return (x >> 16) ^ x;
 }
-
 float _simplexNoiseKernel(float3 d) {
     const float kernel_size_sqr = 0.6; // 0.5 ensures no discontinuities, 0.6 may increase visual quality
     return sqr(sqr(max(0.0, kernel_size_sqr - dot(d, d))));
 }
 
 
-float sqr(float x) {
+T sqr<T>(T x) where T : IArithmetic {
     return x * x;
 }
-float cub(float x) {
+T cub<T>(T x) where T : IArithmetic {
     return x * x * x;
 }
 
 
-/// https://sotrh.github.io/learn-wgpu/intermediate/tutorial13-hdr/#tonemapping
+float4 cubicInterpolationCoefs(float t) {
+    return 0.5 * float4(
+        -t * sqr(t - 1.0),
+        ( 3.0 * t + 1.0) * sqr(t - 1.0) - (t - 1.0),
+        (-3.0 * t - 2.0) * sqr(t - 1.0) + 2.0,
+        (t - 1.0) * sqr(t),
+    );
+}
+
+
+/// from "https://sotrh.github.io/learn-wgpu/intermediate/tutorial13-hdr/#tonemapping"
 float3 acesToneMap(float3 color) {
     const float3x3 m1 = {
         0.59719, 0.07600, 0.02840,
@@ -201,6 +257,15 @@ namespace cie {
             0.0557101, -0.2040211, 1.0569959,
         };
         return mul(m, xyz);
+    }
+
+    float3 linear_sRGB_to_XYZ(float3 rgb) {
+        const float3x3 m = {
+            0.4124,  0.3576,  0.1805,
+            0.2126,  0.7152,  0.0722,
+            0.0193,  0.1192,  0.9505,
+        };
+        return mul(m, rgb);
     }
 
     static const float3 XYZ_table[33] = {

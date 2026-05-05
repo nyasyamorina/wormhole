@@ -3,23 +3,28 @@ const vk = @import("vulkan-zig");
 const glfw = @import("glfw");
 
 const helper = @import("helper.zig");
+const multi_array = helper.multi_array;
 const GlfwCallback = @import("GlfwCallback.zig");
 const shader_layout = @import("shader_layout.zig");
 const Stage = shader_layout.Stage;
 const set_layout = shader_layout.set_layout;
+const set_layout_infos = shader_layout.set_layout_infos;
 const Controller = @import("Controller.zig");
 
+pub const sync_count = 2;
 pub const in_flight_count = 2;
+pub const storage_format: vk.Format = .r32g32b32a32_sfloat;
+const SecondaryCommands = [in_flight_count]vk.CommandBuffer;
+const Commands = [in_flight_count][sync_count]vk.CommandBuffer;
 const Fences = [in_flight_count]vk.Fence;
-const Commands = [in_flight_count]vk.CommandBuffer;
-const Semaphores = [in_flight_count]vk.Semaphore;
+const Semaphores = [in_flight_count][sync_count]vk.Semaphore;
 const UniformBuffers = [in_flight_count]vk.Buffer;
 const UniformOffsets = [in_flight_count + 1]u64;
 const StorageImages = [in_flight_count][set_layout.storage_count]vk.Image;
-const StorageViews = [in_flight_count][set_layout.storage_count]vk.ImageView;
-const SetLayouts = [set_layout.layout_count]vk.DescriptorSetLayout;
-const Sets = [in_flight_count][set_layout.layout_count]vk.DescriptorSet;
-const PipelineLayouts = [Stage.all.len]vk.PipelineLayout;
+const StorageViews = multi_array.Similar(StorageImages, vk.ImageView);
+const SetLayouts = [set_layout_infos.len]vk.DescriptorSetLayout;
+const Sets = [in_flight_count][set_layout_infos.len]vk.DescriptorSet;
+const PipelineLayouts = [2]vk.PipelineLayout;
 const Pipelines = [Stage.all.len]vk.Pipeline;
 
 
@@ -43,15 +48,17 @@ swapchain_semaphores: std.ArrayList(vk.Semaphore) = .empty,
 next_frame: u1 = 0, // total 2 frames, one is on rendering, one is on recording
 frame_fences: Fences,
 acquiring_semaphore: vk.Semaphore,
-computing_commands: Commands,
-computing_semaphores: Semaphores,
-rendering_commands: Commands,
-rendering_semaphores: Semaphores,
+semaphores: Semaphores,
+
+generate_mipmap_commands: SecondaryCommands,
+commands: Commands,
 
 uniform_memory: vk.DeviceMemory,
 uniform_buffers: UniformBuffers,
 uniform_offsets: UniformOffsets,
 
+brightness_scale: f32 = 1,
+mipmap_levels: u5 = 0,
 storage_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 storage_size: u64 = 0,
 storage_memory_type: u5 = undefined,
@@ -93,6 +100,7 @@ pub fn init() !VulkanContext {
         vk.extensions.khr_swapchain.name,
         vk.extensions.khr_spirv_1_4.name,
         vk.extensions.khr_synchronization_2.name,
+        //vk.extensions.img_filter_cubic.name,
     };
 
     const physical_device, const queue_family = try _pickPhysicalDevice(helper.allocator, instance, surface, target_features, &target_extensions);
@@ -109,23 +117,30 @@ pub fn init() !VulkanContext {
     const set_pool = try _createDescriptorPool(device);
     errdefer device.destroyDescriptorPool(set_pool, null);
 
+    const commands = blk: {
+        const len = multi_array.len(Commands);
+        const all_commands = try _createCommands(device, command_pool, .primary, len);
+        break :blk @as(*const Commands, @ptrCast(&all_commands)).*;
+    };
+    const generate_mipmap_commands = try _createCommands(device, command_pool, .secondary, in_flight_count);
+
     const frame_fences = try _createFences(device);
     errdefer for (frame_fences) |f| device.destroyFence(f, null);
     const acquiring_semephore = try device.createSemaphore(&.{}, null);
     errdefer device.destroySemaphore(acquiring_semephore, null);
-    const computing_commands = try _createCommands(device, command_pool);
-    const computing_semaphores = try _createSemaphores(device);
-    errdefer for (computing_semaphores) |s| device.destroySemaphore(s, null);
-    const rendering_commands = try _createCommands(device, command_pool);
-    const rendering_semaphores = try _createSemaphores(device);
-    errdefer for (rendering_semaphores) |s| device.destroySemaphore(s, null);
+    const semaphores = try _createSemaphores(device);
+    errdefer for (semaphores) |ss| for (ss) |s| device.destroySemaphore(s, null);
 
     const uniform_buffers = try _createUniformBuffers(device);
+    const uniform_offsets, const uniform_memory_type_mask = _calcuteUniformMemoryInfo(device, uniform_buffers);
     errdefer for(uniform_buffers) |b| device.destroyBuffer(b, null);
-    const uniform_offsets, const memory_type_mask = _calcuteUniformMemoryInfo(device, uniform_buffers);
-    const memory_type = try memory_type_fiinder.find(memory_type_mask, .{ .host_visible_bit = true, .host_coherent_bit = true });
-    const uniform_memory = try _allocAndBindUniformMemory(device, memory_type, uniform_buffers, uniform_offsets);
+    const uniform_memory_type = try memory_type_fiinder.find(uniform_memory_type_mask, .{ .host_visible_bit = true, .host_coherent_bit = true });
+    const uniform_memory = try device.allocateMemory(&.{
+        .memory_type_index = uniform_memory_type,
+        .allocation_size = uniform_offsets[uniform_offsets.len - 1],
+    }, null);
     errdefer device.freeMemory(uniform_memory, null);
+    try _bindUniformMemory(device, uniform_memory, uniform_buffers, uniform_offsets);
 
     const set_layouts = try _createSetLayouts(device);
     errdefer for (set_layouts) |l| device.destroyDescriptorSetLayout(l, null);
@@ -150,10 +165,10 @@ pub fn init() !VulkanContext {
 
         .frame_fences = frame_fences,
         .acquiring_semaphore = acquiring_semephore,
-        .computing_semaphores = computing_semaphores,
-        .computing_commands = computing_commands,
-        .rendering_semaphores = rendering_semaphores,
-        .rendering_commands = rendering_commands,
+        .semaphores = semaphores,
+
+        .generate_mipmap_commands = generate_mipmap_commands,
+        .commands = commands,
 
         .uniform_memory = uniform_memory,
         .uniform_buffers = uniform_buffers,
@@ -184,8 +199,7 @@ pub fn deinit(self: *VulkanContext) void {
 
     defer for (self.frame_fences) |f| self.device.destroyFence(f, null);
     defer self.device.destroySemaphore(self.acquiring_semaphore, null);
-    defer for (self.computing_semaphores) |s| self.device.destroySemaphore(s, null);
-    defer for (self.rendering_semaphores) |s| self.device.destroySemaphore(s, null);
+    defer for (self.semaphores) |ss| for (ss) |s| self.device.destroySemaphore(s, null);
 
     defer self.device.freeMemory(self.uniform_memory, null);
     defer for (self.uniform_buffers) |b| self.device.destroyBuffer(b, null);
@@ -212,7 +226,7 @@ fn _createWindow() !*glfw.Window {
     glfw.Window.Hint.set.resizable(true);
     glfw.Window.Hint.set.transparentFramebuffer(false);
 
-    const window = glfw.Window.create(.{ .width = 800, .height = 600 }, "wormhole", null, null) orelse {
+    const window = glfw.Window.create(.{ .width = 800, .height = 600 }, "schwarzschild", null, null) orelse {
         const result = glfw.getError();
         std.log.scoped(.glfw).err("failed to create window: ({t}) {s}", .{result.code, result.description orelse ""});
         return error.FaildToCreateWindow;
@@ -450,6 +464,10 @@ fn _pickPhysicalDevice(allocator: std.mem.Allocator, instance: vk.InstanceProxy,
     defer allocator.free(handles);
 
     next_handle: for (handles) |p| {
+        const prop = instance.getPhysicalDeviceFormatProperties(p, storage_format);
+        if (!prop.optimal_tiling_features.sampled_image_filter_linear_bit) continue;
+        if (!prop.optimal_tiling_features.blit_src_bit or !prop.optimal_tiling_features.blit_dst_bit) continue;
+
         var features: @TypeOf(target_features) = .{};
         instance.getPhysicalDeviceFeatures2(p, features.link());
         if (!features.contains(target_features)) continue;
@@ -555,16 +573,117 @@ fn _createCommandPool(device: vk.DeviceProxy, queue_family: u32) !vk.CommandPool
         .queue_family_index = queue_family,
     }, null);
 }
-
-fn _createCommands(device: vk.DeviceProxy, pool: vk.CommandPool) ![in_flight_count]vk.CommandBuffer {
-    var commands = std.mem.zeroes([in_flight_count]vk.CommandBuffer);
-    errdefer device.freeCommandBuffers(pool, commands.len, &commands);
+fn _createCommands(device: vk.DeviceProxy, pool: vk.CommandPool, level: vk.CommandBufferLevel, comptime len: u32) ![len]vk.CommandBuffer {
+    var commands = std.mem.zeroes([len]vk.CommandBuffer);
+    errdefer device.freeCommandBuffers(pool, len, @ptrCast(&commands));
     try device.allocateCommandBuffers(&.{
-        .level = .primary,
+        .level = level,
         .command_pool = pool,
-        .command_buffer_count = commands.len,
-    }, &commands);
+        .command_buffer_count = len,
+    }, @ptrCast(&commands));
     return commands;
+}
+fn _recordGenerateMipmapCommands(commands: SecondaryCommands, images: StorageImages, extent: vk.Extent2D, levels: u5) !void {
+    for (commands, images) |handle, ims| {
+        const command: vk.CommandBufferProxy = .{ .handle = handle, .wrapper = &device_wrapper };
+        const mipmap_im = ims[set_layout.storage_mipmap_index];
+        const render_im = ims[set_layout.storage_render_index];
+
+        var barrier: vk.ImageMemoryBarrier2 = .{
+            .image = mipmap_im,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .src_stage_mask = .{ .blit_bit = true },
+            .src_access_mask = .{ .transfer_write_bit = true },
+            .old_layout = .general,
+
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_stage_mask = .{ .blit_bit = true },
+            .dst_access_mask = .{ .transfer_read_bit = true },
+            .new_layout = .general,
+        };
+
+        var blit_region: vk.ImageBlit2 = .{
+            .src_offsets = undefined,
+            .src_subresource = .{
+                .aspect_mask = .{ .color_bit = true },
+                .mip_level = 0,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+            .dst_offsets = undefined,
+            .dst_subresource = .{
+                .aspect_mask = .{ .color_bit = true },
+                .mip_level = 0,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        };
+        var blit_info: vk.BlitImageInfo2 = .{
+            .src_image = undefined,
+            .src_image_layout = .general,
+            .dst_image = undefined,
+            .dst_image_layout = .general,
+            .filter = .linear,
+            .region_count = 1,
+            .p_regions = @ptrCast(&blit_region),
+        };
+
+        try command.resetCommandBuffer(.{});
+        try command.beginCommandBuffer(&.{
+            .p_inheritance_info = &.{
+                .subpass = 0,
+                .occlusion_query_enable = .false,
+            },
+        });
+
+        command.clearColorImage(mipmap_im, .general, &.{ .float_32 = .{0, 0, 0, 0} }, 1, &.{ .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        } });
+
+        blit_info.src_image = render_im;
+        blit_region.src_offsets = _3dOffsets(.{ .x = 0, .y = 0 }, extent);
+        blit_info.dst_image = mipmap_im;
+        blit_region.dst_offsets = _3dOffsets(mipmapOffset(extent, 0), mipmapExtent(extent, 0));
+        command.blitImage2(&blit_info);
+
+        // if the extent of src is odd, blit sampling is not uniform for all src samples, this will changes the average brightness,
+        // keeping the blit sampling uniform by padding the extent of src to even, and the average brightness will only be scaled by a constant.
+        blit_info.src_image = mipmap_im;
+        for (0 .. levels - 1) |level| {
+            blit_region.src_offsets = _3dOffsets(bmipmapOffset(extent, @intCast(level),     true),  bmipmapExtent(extent, @intCast(level),     true));
+            blit_region.dst_offsets = _3dOffsets(bmipmapOffset(extent, @intCast(level + 1), false), bmipmapExtent(extent, @intCast(level + 1), false));
+            command.pipelineBarrier2(&.{ .image_memory_barrier_count = 1, .p_image_memory_barriers = @ptrCast(&barrier) });
+            command.blitImage2(&blit_info);
+        }
+
+        // the blttings above are for correct average brightness, and the process cannot generate the correct mipmaps,
+        // the following process can generate mipmmaps, but still suffer from the un-uniform blit sampling.
+        //barrier.src_access_mask = .{ .transfer_read_bit = true, .transfer_write_bit = true };
+        //barrier.dst_access_mask = .{ .transfer_read_bit = true, .transfer_write_bit = true };
+        //command.pipelineBarrier2(&.{ .image_memory_barrier_count = 1, .p_image_memory_barriers = @ptrCast(&barrier) });
+        //barrier.src_access_mask = .{ .transfer_write_bit = true };
+        //barrier.dst_access_mask = .{ .transfer_read_bit = true };
+        //for (0 .. levels - 2) |level| {
+        //    blit_region.src_offsets = _3dOffsets(mipmapOffset(extent, @intCast(level)),     mipmapExtent(extent, @intCast(level)));
+        //    blit_region.dst_offsets = _3dOffsets(mipmapOffset(extent, @intCast(level + 1)), mipmapExtent(extent, @intCast(level + 1)));
+        //    command.pipelineBarrier2(&.{ .image_memory_barrier_count = 1, .p_image_memory_barriers = @ptrCast(&barrier) });
+        //    command.blitImage2(&blit_info);
+        //}
+
+        try command.endCommandBuffer();
+    }
 }
 
 fn _createDescriptorPool(device: vk.DeviceProxy) !vk.DescriptorPool {
@@ -580,7 +699,7 @@ fn _createDescriptorPool(device: vk.DeviceProxy) !vk.DescriptorPool {
     };
     return device.createDescriptorPool(&.{
         .flags = .{ .free_descriptor_set_bit = true },
-        .max_sets = in_flight_count * (set_layout.layout_count - 1 + Stage.all.len),
+        .max_sets = in_flight_count * set_layout_infos.len,
         .pool_size_count = pool_sizes.len,
         .p_pool_sizes = &pool_sizes,
     }, null);
@@ -589,13 +708,13 @@ fn _createSetLayouts(device: vk.DeviceProxy) !SetLayouts {
     var layouts = std.mem.zeroes(SetLayouts);
     errdefer for (layouts) |l| device.destroyDescriptorSetLayout(l, null);
 
-    layouts[0] = try device.createDescriptorSetLayout(&shader_layout.set_layout.uniform, null);
-    layouts[1] = try device.createDescriptorSetLayout(&shader_layout.set_layout.storage, null);
-    layouts[2] = try device.createDescriptorSetLayout(&shader_layout.set_layout.surface, null);
+    for (&layouts, shader_layout.set_layout_infos) |*layout, info| {
+        layout.* = try device.createDescriptorSetLayout(&info, null);
+    }
     return layouts;
 }
 fn _createSets(device: vk.DeviceProxy, pool: vk.DescriptorPool, layouts: SetLayouts) !Sets {
-    const set_count = in_flight_count * (set_layout.layout_count);
+    const set_count = in_flight_count * set_layout_infos.len;
 
     var set_layouts: [in_flight_count]SetLayouts = undefined;
     @memset(&set_layouts, layouts);
@@ -675,20 +794,15 @@ fn _updateSurfaceDescriptor(device: vk.DeviceProxy, view: vk.ImageView, set: vk.
 }
 
 fn _createPipelineLayouts(device: vk.DeviceProxy, set_layouts: SetLayouts) !PipelineLayouts {
-    var layouts = std.mem.zeroes([Stage.all.len]vk.PipelineLayout);
-    errdefer for (layouts) |l| device.destroyPipelineLayout(l, null);
-
-    var ps_layouts: SetLayouts = undefined;
-    for (Stage.all) |stage| {
-        const set_layout_indices = stage.getNamedStatic(shader_layout.pipeline_set_layout_indices);
-        for (set_layout_indices, 0..) |layout_idx, idx| ps_layouts[idx] = set_layouts[layout_idx];
-
-        layouts[@intFromEnum(stage)] = try device.createPipelineLayout(&.{
-            .set_layout_count = @intCast(set_layout_indices.len),
-            .p_set_layouts = &ps_layouts,
-        }, null);
-    }
-    return layouts;
+    const layout = try device.createPipelineLayout(&.{
+        .set_layout_count = set_layout_infos.len - 1,
+        .p_set_layouts = &set_layouts,
+    }, null);
+    const final_layout = try device.createPipelineLayout(&.{
+        .set_layout_count = set_layout_infos.len,
+        .p_set_layouts = &set_layouts,
+    }, null);
+    return .{layout, final_layout};
 }
 
 pub const MemoryTypeFinder = struct {
@@ -746,25 +860,17 @@ fn _calcuteUniformMemoryInfo(device: vk.DeviceProxy, buffers: UniformBuffers) st
     offsets[in_flight_count] = size;
     return .{offsets, mask};
 }
-fn _allocAndBindUniformMemory(device: vk.DeviceProxy, memory_type: u5, buffers: UniformBuffers, offsets: UniformOffsets) !vk.DeviceMemory {
-    const memory = try device.allocateMemory(&.{
-        .memory_type_index = memory_type,
-        .allocation_size = offsets[in_flight_count],
-    }, null);
-    errdefer device.freeMemory(memory, null);
-
-    for (buffers, offsets[0 .. in_flight_count]) |b, o| {
-        try device.bindBufferMemory(b, memory, o);
-    }
-
-    return memory;
+fn _bindUniformMemory(device: vk.DeviceProxy, memory: vk.DeviceMemory, buffers: UniformBuffers, offsets: UniformOffsets) !void {
+    for (buffers, offsets[0 .. in_flight_count]) |b, o| try device.bindBufferMemory(b, memory, o);
 }
 
 fn _createSemaphores(device: vk.DeviceProxy) !Semaphores {
     var semaphores = std.mem.zeroes(Semaphores);
-    errdefer for (semaphores) |s| device.destroySemaphore(s, null);
+    errdefer for (semaphores) |ss| for (ss) |s| device.destroySemaphore(s, null);
 
-    for (&semaphores) |*s| s.* = try device.createSemaphore(&.{}, null);
+    for (&semaphores) |*ss| {
+        for (ss) |*s| s.* = try device.createSemaphore(&.{}, null);
+    }
     return semaphores;
 }
 fn _createFences(device: vk.DeviceProxy) !Fences {
@@ -777,7 +883,66 @@ fn _createFences(device: vk.DeviceProxy) !Fences {
     return fences;
 }
 
-fn _createImageView(device: vk.DeviceProxy, image: vk.Image, format: vk.Format) !vk.ImageView {
+const ImageBarrierInfo = struct {
+    stage_mask: vk.PipelineStageFlags2,
+    access_mask: vk.AccessFlags2,
+    layout: vk.ImageLayout,
+};
+inline fn _imageBarrier(command: vk.CommandBufferProxy, image: vk.Image, src: ImageBarrierInfo, dst: ImageBarrierInfo) void {
+    command.pipelineBarrier2(&.{
+        .image_memory_barrier_count = 1,
+        .p_image_memory_barriers = &.{ .{
+            .image = image,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .src_stage_mask = src.stage_mask,
+            .src_access_mask = src.access_mask,
+            .old_layout = src.layout,
+
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_stage_mask = dst.stage_mask,
+            .dst_access_mask = dst.access_mask,
+            .new_layout = dst.layout,
+        } },
+    });
+}
+fn _storageImageBarrier(command: vk.CommandBufferProxy, images: [set_layout.storage_count]vk.Image, src: ImageBarrierInfo, dst: ImageBarrierInfo) void {
+    var barriers: [set_layout.storage_count]vk.ImageMemoryBarrier2 = undefined;
+    for (&barriers, images) |*b, im| b.* = .{
+        .image = im,
+        .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .src_stage_mask = src.stage_mask,
+        .src_access_mask = src.access_mask,
+        .old_layout = src.layout,
+
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_stage_mask = dst.stage_mask,
+        .dst_access_mask = dst.access_mask,
+        .new_layout = dst.layout,
+    };
+
+    command.pipelineBarrier2(&.{
+        .image_memory_barrier_count = set_layout.storage_count,
+        .p_image_memory_barriers = &barriers,
+    });
+}
+
+inline fn _createImageView(device: vk.DeviceProxy, image: vk.Image, format: vk.Format) !vk.ImageView {
     return device.createImageView(&.{
         .image = image,
         .format = format,
@@ -814,14 +979,27 @@ fn _shrinkSemaphores(device: vk.DeviceProxy, semaphores: *std.ArrayList(vk.Semap
     }
 }
 
-fn _3dExtent(extent2d: vk.Extent2D) vk.Extent3D {
+inline fn _3dExtent(extent2d: vk.Extent2D) vk.Extent3D {
     return .{ .width = extent2d.width, .height = extent2d.height, .depth = 1 };
+}
+inline fn _3dOffsets(offset: vk.Offset2D, extent: vk.Extent2D) [2]vk.Offset3D {
+    return .{
+        .{
+            .x = offset.x,
+            .y = offset.y,
+            .z = 0,
+        },
+        .{
+            .x = offset.x + @as(i32, @intCast(extent.width)),
+            .y = offset.y + @as(i32, @intCast(extent.height)),
+            .z = 1,
+        }
+    };
 }
 
 
 pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
-    log.debug("recreating swapchain...", .{});
-    var timer = if (helper.is_debug) helper.Timer(&.{.total, .swapchain, .swapchain_views, .destroy, .semaphores, .storage_images}, 0).init else void {};
+    var timer = if (helper.is_debug) helper.Timer(&.{.total, .swapchain, .swapchain_views, .destroy, .semaphores}, 0).init else void {};
     if (helper.is_debug) timer.start(.total);
     self.device.deviceWaitIdle() catch |err| log.err("failed to wait device idle: {t}", .{err});
 
@@ -851,136 +1029,7 @@ pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
     const old_len = self.swapchain_semaphores.items.len;
     errdefer if (self.swapchain_semaphores.items.len > old_len) _shrinkSemaphores(self.device, &self.swapchain_semaphores, old_len);
     if (self.swapchain_semaphores.items.len < images.len) try _growthSemaphores(helper.allocator, self.device, &self.swapchain_semaphores, images.len);
-    if (helper.is_debug) timer.stop(.swapchain_views);
-
-    if (helper.is_debug) timer.start(.storage_images);
-    if (!std.meta.eql(self.swapchain_info.image_extent, self.storage_extent)) {
-        // create new storage images and views
-        var storage_images = std.mem.zeroes([in_flight_count][set_layout.storage_count]vk.Image);
-        var offsets: [in_flight_count][set_layout.storage_count]u64 = undefined;
-        errdefer for (storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
-
-        var mem_type_mask: u32 = std.math.maxInt(u32);
-        var total_size: u64 = 0;
-        for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |i| {
-            storage_images[f][i] = try self.device.createImage(&.{
-                .image_type = .@"2d",
-                .format = .r32g32b32a32_sfloat,
-                .extent = _3dExtent(self.swapchain_info.image_extent),
-                .mip_levels = 1,
-                .array_layers = 1,
-                .samples = @bitCast(@as(vk.Flags, 1)),
-                .tiling = .optimal,
-                .usage = .{ .storage_bit = true },
-                .sharing_mode = .exclusive,
-                .initial_layout = .undefined,
-            }, null);
-
-            const mem_req = self.device.getImageMemoryRequirements(storage_images[f][i]);
-            total_size += _aligAppendSize(total_size, mem_req.alignment);
-            offsets[f][i] = total_size;
-            total_size += mem_req.size;
-            mem_type_mask &= mem_req.memory_type_bits;
-        };
-
-        var storage_views = std.mem.zeroes([in_flight_count][set_layout.storage_count]vk.ImageView);
-        errdefer for (storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
-
-        const realloc_memory = total_size > self.storage_size or mem_type_mask & (@as(u32, 1) << self.storage_memory_type) == 0;
-        const storage_memory, const memory_type = if (realloc_memory) blk: {
-            // alloc new storage memory
-            const mem_type = try self.memory_type_fiinder.find(mem_type_mask, .{ .device_local_bit = true });
-
-            const memory = try self.device.allocateMemory(&.{
-                .memory_type_index = mem_type,
-                .allocation_size = total_size,
-            }, null);
-            break :blk .{memory, mem_type};
-        } else .{self.storage_memory, self.storage_memory_type};
-        errdefer if (realloc_memory) self.device.freeMemory(storage_memory, null);
-
-        // bind image memory and create new image views
-        for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |i| {
-            try self.device.bindImageMemory(storage_images[f][i], storage_memory, offsets[f][i]);
-            storage_views[f][i] = try _createImageView(self.device, storage_images[f][i], .r32g32b32a32_sfloat);
-        };
-
-        // transite image layout
-        {
-            // create one-time command buffer
-            var command: vk.CommandBufferProxy = .{ .handle = .null_handle, .wrapper = self.device.wrapper };
-            try self.device.allocateCommandBuffers(&.{
-                .command_pool = self.command_pool,
-                .level = .primary,
-                .command_buffer_count = 1,
-            }, @ptrCast(&command.handle));
-            defer self.device.freeCommandBuffers(self.command_pool, 1, @ptrCast(&command.handle));
-
-            // record commands
-            try command.beginCommandBuffer(&.{});
-            for (storage_images) |im1| for (im1) |im| {
-                command.pipelineBarrier2(&.{
-                    .image_memory_barrier_count = 1,
-                    .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
-                        .image = im,
-                        .subresource_range = .{
-                            .aspect_mask = .{ .color_bit = true },
-                            .base_mip_level = 0,
-                            .level_count = 1,
-                            .base_array_layer = 0,
-                            .layer_count = 1,
-                        },
-
-                        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-                        .src_stage_mask = .{ .top_of_pipe_bit = true },
-                        .src_access_mask = .{},
-                        .old_layout = .undefined,
-
-                        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-                        .dst_stage_mask = .{ .compute_shader_bit = true },
-                        .dst_access_mask = .{ .shader_write_bit = true },
-                        .new_layout = .general,
-                    } },
-                });
-            };
-            try command.endCommandBuffer();
-
-            // submit
-            const queue: vk.QueueProxy = .{ .handle = self.queue, .wrapper = self.device.wrapper };
-            try queue.submit(1, &.{ vk.SubmitInfo {
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{command.handle},
-            } }, .null_handle);
-
-            try queue.waitIdle();
-        }
-
-        try self.device.deviceWaitIdle();
-    //=//=//=// vvv No Error Context vvv
-
-        if (realloc_memory) {
-            // free old memory
-            self.device.freeMemory(self.storage_memory, null);
-
-            // store new memory
-            self.storage_memory = storage_memory;
-            self.storage_size = total_size;
-            self.storage_memory_type = memory_type;
-        }
-
-        // destroy images and views
-        for (self.storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
-        for (self.storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
-
-        // store new storage images and views
-        self.storage_extent = self.swapchain_info.image_extent;
-        self.storage_images = storage_images;
-        self.storage_views = storage_views;
-
-        // update descriptor
-        _updateStorageDescriptor(self.device, self.storage_views, self.sets);
-    }
-    if (helper.is_debug) timer.stop(.swapchain_views);
+    if (helper.is_debug) timer.stop(.semaphores);
 
     // destroy extra swapchain semaphores
     if (helper.is_debug) timer.start(.destroy);
@@ -1000,7 +1049,104 @@ pub fn recreateSwapchain(self: *VulkanContext, extent: vk.Extent2D) !void {
 
     if (helper.is_debug) timer.stop(.total);
     if (helper.is_debug) timer.report() catch {};
-    log.debug("swapchain recreated", .{});
+}
+
+inline fn _createStorageImage(device: vk.DeviceProxy, usage: vk.ImageUsageFlags, extent: vk.Extent2D, mip_levels: u32, mem_size: *u64, mem_type_mask: *u32) !struct {vk.Image, u64} {
+    const image = try device.createImage(&.{
+        .image_type = .@"2d",
+        .format = storage_format,
+        .extent = _3dExtent(extent),
+        .mip_levels = mip_levels,
+        .array_layers = 1,
+        .samples = @bitCast(@as(vk.Flags, 1)),
+        .tiling = .optimal,
+        .usage = usage,
+        .sharing_mode = .exclusive,
+        .initial_layout = .undefined,
+    }, null);
+
+    const mem_req = device.getImageMemoryRequirements(image);
+    mem_size.* += _aligAppendSize(mem_size.*, mem_req.alignment);
+    const offset = mem_size.*;
+    mem_size.* += mem_req.size;
+    mem_type_mask.* &= mem_req.memory_type_bits;
+    return .{image, offset};
+}
+
+fn _recreateStorageImages(self: *VulkanContext) !void {
+    var timer = if (helper.is_debug) helper.Timer(&.{.storage_images}, 0).init else void {};
+    if (helper.is_debug) timer.start(.storage_images);
+
+    // create new storage images and views
+    const extent = self.swapchain_info.image_extent;
+    var storage_images = std.mem.zeroes(StorageImages);
+    var storage_offsets: multi_array.Similar(StorageImages, u64) = undefined;
+    errdefer for (storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
+
+    var mem_type_mask: u32 = std.math.maxInt(u32);
+    var total_size: u64 = 0;
+    for (0 .. multi_array.size(StorageImages, 0)) |f| for (0 .. multi_array.size(StorageImages, 1)) |i| {
+        var usage: vk.ImageUsageFlags = .{ .storage_bit = true };
+        switch (i) {
+            set_layout.storage_mipmap_index => usage = usage.merge(.{ .transfer_src_bit = true, .transfer_dst_bit = true }),
+            set_layout.storage_render_index => usage.transfer_src_bit = true,
+            else => {},
+        }
+        storage_images[f][i], storage_offsets[f][i] = try _createStorageImage(self.device, usage, extent, 1, &total_size, &mem_type_mask);
+    };
+
+    const realloc_memory = total_size > self.storage_size or mem_type_mask & (@as(u32, 1) << self.storage_memory_type) == 0;
+    const storage_memory, const memory_type = if (realloc_memory) blk: {
+        // alloc new storage memory
+        const mem_type = try self.memory_type_fiinder.find(mem_type_mask, .{ .device_local_bit = true });
+
+        const memory = try self.device.allocateMemory(&.{
+            .memory_type_index = mem_type,
+            .allocation_size = total_size,
+        }, null);
+        break :blk .{memory, mem_type};
+    } else .{self.storage_memory, self.storage_memory_type};
+    errdefer if (realloc_memory) self.device.freeMemory(storage_memory, null);
+
+    // bind image memory and create new image views
+    var storage_views = std.mem.zeroes(StorageViews);
+    errdefer for (storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
+    for (0 .. in_flight_count) |f| for (0 .. set_layout.storage_count) |i| {
+        try self.device.bindImageMemory(storage_images[f][i], storage_memory, storage_offsets[f][i]);
+        storage_views[f][i] = try _createImageView(self.device, storage_images[f][i], storage_format);
+    };
+
+    self.device.deviceWaitIdle() catch |err| log.err("failed to wait device idle: {t}", .{err});
+
+    const mipmap_levels: u5 = @intCast(std.math.log2_int_ceil(u32, @max(extent.width, extent.height)));
+    try _recordGenerateMipmapCommands(self.generate_mipmap_commands, storage_images, extent, mipmap_levels);
+
+    if (realloc_memory) {
+        // free old memory
+        self.device.freeMemory(self.storage_memory, null);
+
+        // store new memory
+        self.storage_memory = storage_memory;
+        self.storage_size = total_size;
+        self.storage_memory_type = memory_type;
+    }
+
+    // destroy images and views
+    for (self.storage_images) |im1| for (im1) |im| self.device.destroyImage(im, null);
+    for (self.storage_views) |v1| for (v1) |v| self.device.destroyImageView(v, null);
+
+    // store new storage images and views
+    self.storage_extent = extent;
+    self.storage_images = storage_images;
+    self.storage_views = storage_views;
+    self.mipmap_levels = mipmap_levels;
+    self.brightness_scale = bmipmapScaler(extent);
+
+    // update descriptor
+    _updateStorageDescriptor(self.device, self.storage_views, self.sets);
+
+    if (helper.is_debug) timer.stop(.storage_images);
+    if (helper.is_debug) timer.report() catch {};
 }
 
 pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !void {
@@ -1017,17 +1163,21 @@ pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !voi
             .module = module,
             .p_name = "main",
         },
-        .layout = self.pipeline_layouts[@intFromEnum(stage)],
+        .layout = self.pipeline_layouts[@intFromBool(stage.getNamedStatic(shader_layout.pipeline_set_has_surface))],
         .base_pipeline_index = 0,
     } }, null, @ptrCast(&pipeline));
 
     self.pipelines[@intFromEnum(stage)] = pipeline;
 }
 
+fn _dispatchComputePipeline(command: vk.CommandBufferProxy, pipeline: vk.Pipeline, dispatch_group: vk.Extent3D) void {
+    command.bindPipeline(.compute, pipeline);
+    command.dispatch(dispatch_group.width, dispatch_group.height, dispatch_group.depth);
+}
+
 
 pub const FrameResouces = struct {
     swapchain: vk.SwapchainKHR,
-    extent: vk.Extent2D,
     swapchain_index: u32,
     swapchain_image: vk.Image,
     swapchain_view: vk.ImageView,
@@ -1037,16 +1187,21 @@ pub const FrameResouces = struct {
     queue: vk.Queue,
     fence: vk.Fence,
     acquiring_semaphore: vk.Semaphore,
-    computing_command: vk.CommandBuffer,
-    computing_semaphore: vk.Semaphore,
-    rendering_command: vk.CommandBuffer,
-    rendering_semaphore: vk.Semaphore,
+    semaphores: std.meta.Child(Semaphores),
+    dispatch_group: vk.Extent3D,
+
+    generate_mipmap_command: vk.CommandBuffer,
+    commands: std.meta.Child(Commands),
 
     uniform_range: [2]u64,
     uniform_memory: vk.DeviceMemory,
     uniform_buffer: vk.Buffer,
 
-    sets: [set_layout.layout_count]vk.DescriptorSet,
+    mipmap_levels: u5,
+    extent: vk.Extent2D,
+    storage_images: std.meta.Child(StorageImages),
+
+    sets: [set_layout_infos.len]vk.DescriptorSet,
     pipeline_layouts: PipelineLayouts,
     pipelines: Pipelines,
 
@@ -1057,161 +1212,119 @@ pub const FrameResouces = struct {
         self.device.unmapMemory(self.uniform_memory);
     }
 
-    pub const DrawFrameInfo = struct {
-        n_iter_call: usize,
-    };
+    pub fn drawFrame(self: FrameResouces) !void {
+        const b_pipe_begin: ImageBarrierInfo = .{
+            .stage_mask = .{ .top_of_pipe_bit = true },
+            .access_mask = .{},
+            .layout = .undefined,
+        };
+        const b_compute_w: ImageBarrierInfo = .{
+            .stage_mask = .{ .compute_shader_bit = true },
+            .access_mask = .{ .shader_write_bit = true },
+            .layout = .general,
+        };
+        const b_compute_rw: ImageBarrierInfo = .{
+            .stage_mask = .{ .compute_shader_bit = true },
+            .access_mask = .{ .shader_read_bit = true, .shader_write_bit = true },
+            .layout = .general,
+        };
+        const b_blit_rw: ImageBarrierInfo = .{
+            .stage_mask = .{ .blit_bit = true },
+            .access_mask = .{ .transfer_read_bit = true, .transfer_write_bit = true },
+            .layout = .general,
+        };
+        const b_pipe_end: ImageBarrierInfo = .{
+            .stage_mask = .{ .bottom_of_pipe_bit = true },
+            .access_mask = .{},
+            .layout = .general,
+        };
+        const b_present: ImageBarrierInfo = .{
+            .stage_mask = .{ .bottom_of_pipe_bit = true },
+            .access_mask = .{},
+            .layout = .present_src_khr,
+        };
 
-    pub fn drawFrame(self: FrameResouces, info: DrawFrameInfo) !void {
-        _updateSurfaceDescriptor(self.device, self.swapchain_view, self.sets[self.sets.len - 1]);
+        const command0 = self.commandProxy(0);
+        try command0.resetCommandBuffer(.{});
+        try command0.beginCommandBuffer(&.{});
+        command0.bindDescriptorSets2(&.{
+            .stage_flags = .{ .compute_bit = true },
+            .layout = self.pipeline_layouts[0],
+            .first_set = 0,
+            .descriptor_set_count = set_layout_infos.len - 1,
+            .p_descriptor_sets = &self.sets,
+        });
+        _storageImageBarrier(command0, self.storage_images, b_pipe_begin, b_compute_w);
+        _dispatchComputePipeline(command0, self.pipelines[@intFromEnum(Stage.init_ray)], self.dispatch_group);
+        _storageImageBarrier(command0, self.storage_images, b_compute_w, b_compute_rw);
+        _dispatchComputePipeline(command0, self.pipelines[@intFromEnum(Stage.iter_ray)], self.dispatch_group);
+        _storageImageBarrier(command0, self.storage_images, b_compute_rw, b_compute_rw);
+        _dispatchComputePipeline(command0, self.pipelines[@intFromEnum(Stage.render_ray)], self.dispatch_group);
+        _storageImageBarrier(command0, self.storage_images, b_compute_rw, b_pipe_end);
+        command0.executeCommands(1, @ptrCast(&self.generate_mipmap_command));
+        _storageImageBarrier(command0, self.storage_images, b_blit_rw, b_compute_rw);
+        _dispatchComputePipeline(command0, self.pipelines[@intFromEnum(Stage.post_process_1)], self.dispatch_group);
+        _storageImageBarrier(command0, self.storage_images, b_compute_rw, b_compute_rw);
+        _dispatchComputePipeline(command0, self.pipelines[@intFromEnum(Stage.post_process_2)], self.dispatch_group);
+        try command0.endCommandBuffer();
+        const submit0: vk.SubmitInfo = .{
+            .command_buffer_count = 1,
+            .p_command_buffers = &.{command0.handle},
+            .signal_semaphore_count = 1,
+            .p_signal_semaphores = &.{self.semaphores[0]},
+        };
 
-        const queue: vk.QueueProxy = .{ .handle = self.queue, .wrapper = self.device.wrapper };
-        const group_x = std.math.divCeil(u32, self.extent.width, 16) catch unreachable;
-        const group_y = std.math.divCeil(u32, self.extent.height, 16) catch unreachable;
+        const command1 = self.commandProxy(1);
+        try command1.resetCommandBuffer(.{});
+        try command1.beginCommandBuffer(&.{});
+        command1.bindDescriptorSets2(&.{
+            .stage_flags = .{ .compute_bit = true },
+            .layout = self.pipeline_layouts[1],
+            .first_set = 0,
+            .descriptor_set_count = set_layout_infos.len,
+            .p_descriptor_sets = &self.sets,
+        });
+        _imageBarrier(command1, self.swapchain_image, b_pipe_begin, b_compute_w);
+        _dispatchComputePipeline(command1, self.pipelines[@intFromEnum(Stage.final)], self.dispatch_group);
+        _imageBarrier(command1, self.swapchain_image, b_compute_w, b_present);
+        try command1.endCommandBuffer();
+        const submit1: vk.SubmitInfo = .{
+            .command_buffer_count = 1,
+            .p_command_buffers = &.{command1.handle},
+            .wait_semaphore_count = 2,
+            .p_wait_semaphores = &.{self.semaphores[0], self.acquiring_semaphore},
+            .p_wait_dst_stage_mask = &.{.{ .compute_shader_bit = true }, .{ .compute_shader_bit = true } },
+            .signal_semaphore_count = 1,
+            .p_signal_semaphores = &.{self.semaphores[1]},
+        };
 
-        const computing_command: vk.CommandBufferProxy = .{ .handle = self.computing_command, .wrapper = self.device.wrapper };
-        const rendering_command: vk.CommandBufferProxy = .{ .handle = self.rendering_command, .wrapper = self.device.wrapper };
+        const queue: vk.QueueProxy = .{ .handle = self.queue, .wrapper = &device_wrapper };
+        try queue.submit(sync_count, &.{submit0, submit1}, self.fence);
 
-        _ = .{info};
-
-        try computing_command.resetCommandBuffer(.{});
-        try computing_command.beginCommandBuffer(&.{});
-        { // init ray
-            const stage = Stage.init_ray;
-            const uniform_set = self.sets[0];
-            const storage_set = self.sets[1];
-            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
-            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
-            const pipeline = self.pipelines[@intFromEnum(stage)];
-
-            computing_command.bindPipeline(.compute, pipeline);
-            computing_command.bindDescriptorSets(
-                .compute, pipeline_layout,
-                0, set_count, &.{uniform_set, storage_set},
-                0, null,
-            );
-            computing_command.dispatch(group_x, group_y, 1);
-        }
-        { // iter ray
-            const stage = Stage.iter_ray;
-            const uniform_set = self.sets[0];
-            const storage_set = self.sets[1];
-            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
-            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
-            const pipeline = self.pipelines[@intFromEnum(stage)];
-
-            computing_command.bindPipeline(.compute, pipeline);
-            computing_command.bindDescriptorSets(
-                .compute, pipeline_layout,
-                0, set_count, &.{uniform_set, storage_set},
-                0, null,
-            );
-            for (0 .. info.n_iter_call) |_| computing_command.dispatch(group_x, group_y, 1);
-        }
-        try computing_command.endCommandBuffer();
-
-        try rendering_command.resetCommandBuffer(.{});
-        try rendering_command.beginCommandBuffer(&.{});
-        { // render ray
-            const stage = Stage.render_ray;
-            const uniform_set = self.sets[0];
-            const storage_set = self.sets[1];
-            const surface_set = self.sets[2];
-            const set_count = comptime stage.getNamedStatic(shader_layout.pipeline_set_layout_indices).len;
-            const pipeline_layout = self.pipeline_layouts[@intFromEnum(stage)];
-            const pipeline = self.pipelines[@intFromEnum(stage)];
-
-            rendering_command.pipelineBarrier2(&.{
-                .image_memory_barrier_count = 1,
-                .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
-                    .image = self.swapchain_image,
-                    .subresource_range = .{
-                        .aspect_mask = .{ .color_bit = true },
-                        .base_mip_level = 0,
-                        .level_count = 1,
-                        .base_array_layer = 0,
-                        .layer_count = 1,
-                    },
-
-                    .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-                    .src_stage_mask = .{ .top_of_pipe_bit = true },
-                    .src_access_mask = .{},
-                    .old_layout = .undefined,
-
-                    .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-                    .dst_stage_mask = .{ .compute_shader_bit = true },
-                    .dst_access_mask = .{ .shader_write_bit = true },
-                    .new_layout = .general,
-                } },
-            });
-
-            rendering_command.bindPipeline(.compute, pipeline);
-            rendering_command.bindDescriptorSets(
-                .compute, pipeline_layout,
-                0, set_count, &.{uniform_set, storage_set, surface_set},
-                0, null,
-            );
-            rendering_command.dispatch(group_x, group_y, 1);
-
-            rendering_command.pipelineBarrier2(&.{
-                .image_memory_barrier_count = 1,
-                .p_image_memory_barriers = &.{ vk.ImageMemoryBarrier2 {
-                    .image = self.swapchain_image,
-                    .subresource_range = .{
-                        .aspect_mask = .{ .color_bit = true },
-                        .base_mip_level = 0,
-                        .level_count = 1,
-                        .base_array_layer = 0,
-                        .layer_count = 1,
-                    },
-
-                    .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-                    .src_stage_mask = .{ .compute_shader_bit = true },
-                    .src_access_mask = .{ .shader_write_bit = true },
-                    .old_layout = .general,
-
-                    .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-                    .dst_stage_mask = .{ .bottom_of_pipe_bit = true },
-                    .dst_access_mask = .{},
-                    .new_layout = .present_src_khr,
-                } },
-            });
-        }
-        try rendering_command.endCommandBuffer();
-
-        try queue.submit(2, &.{
-            vk.SubmitInfo {
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{computing_command.handle},
-                .signal_semaphore_count = 1,
-                .p_signal_semaphores = @ptrCast(&self.computing_semaphore),
-            },
-            vk.SubmitInfo {
-                .command_buffer_count = 1,
-                .p_command_buffers = &.{rendering_command.handle},
-                .wait_semaphore_count = 2,
-                .p_wait_semaphores = &.{self.computing_semaphore, self.acquiring_semaphore},
-                .p_wait_dst_stage_mask = &.{.{ .compute_shader_bit = true }, .{ .compute_shader_bit = true } },
-                .signal_semaphore_count = 1,
-                .p_signal_semaphores = @ptrCast(&self.rendering_semaphore),
-            },
-        }, self.fence);
         const present_result = queue.presentKHR(&.{
             .swapchain_count = 1,
             .p_swapchains = &.{self.swapchain},
             .p_image_indices = &.{self.swapchain_index},
             .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast(&self.rendering_semaphore),
+            .p_wait_semaphores = @ptrCast(&self.semaphores[sync_count - 1]),
         });
-
-        if (present_result) |result| switch (result) {
+        switch (try present_result) {
             .success => {},
             .suboptimal_khr => return error.OutOfDateKHR,
             else => unreachable,
-        } else |err| return err;
+        }
+    }
+
+    fn commandProxy(self: FrameResouces, index: usize) vk.CommandBufferProxy {
+        return .init(self.commands[index], &device_wrapper);
     }
 };
 
 pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
+    if (!std.meta.eql(self.swapchain_info.image_extent, self.storage_extent)) {
+        try self._recreateStorageImages();
+    }
+
     const fence = self.frame_fences[self.next_frame];
 
     var wait_count: usize = 0;
@@ -1221,19 +1334,18 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
         log.warn("waiting for frame fence over {d}s", .{wait_count});
     }
 
-    const result = self.device.acquireNextImageKHR(
+    const result = try self.device.acquireNextImageKHR(
         self.swapchain,
         std.math.maxInt(u64),
         self.acquiring_semaphore,
         .null_handle,
-    ) catch |err| return err;
+    );
     if (result.result == .not_ready) return null;
 
     try self.device.resetFences(1, &.{fence});
 
     const resources: FrameResouces = .{
         .swapchain = self.swapchain,
-        .extent = self.storage_extent,
         .swapchain_index = result.image_index,
         .swapchain_image = self.swapchain_images.items[result.image_index],
         .swapchain_view = self.swapchain_views.items[result.image_index],
@@ -1243,14 +1355,23 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
         .queue = self.queue,
         .fence = fence,
         .acquiring_semaphore = self.acquiring_semaphore,
-        .computing_command = self.computing_commands[self.next_frame],
-        .computing_semaphore = self.computing_semaphores[self.next_frame],
-        .rendering_command = self.rendering_commands[self.next_frame],
-        .rendering_semaphore = self.rendering_semaphores[self.next_frame],
+        .semaphores = self.semaphores[self.next_frame],
+        .dispatch_group = .{
+            .width = std.math.divCeil(u32, self.storage_extent.width, 16) catch unreachable,
+            .height = std.math.divCeil(u32, self.storage_extent.height, 16) catch unreachable,
+            .depth = 1,
+        },
+
+        .generate_mipmap_command = self.generate_mipmap_commands[self.next_frame],
+        .commands = self.commands[self.next_frame],
 
         .uniform_range = .{self.uniform_offsets[self.next_frame], self.uniform_offsets[@as(u2, self.next_frame) + 1]},
         .uniform_memory = self.uniform_memory,
         .uniform_buffer = self.uniform_buffers[self.next_frame],
+
+        .mipmap_levels = self.mipmap_levels,
+        .extent = self.storage_extent,
+        .storage_images = self.storage_images[self.next_frame],
 
         .sets = self.sets[self.next_frame],
         .pipeline_layouts = self.pipeline_layouts,
@@ -1260,5 +1381,84 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
     std.mem.swap(vk.Semaphore, &self.acquiring_semaphore, &self.swapchain_semaphores.items[result.image_index]);
     self.next_frame +%= 1;
 
+    _updateSurfaceDescriptor(self.device, resources.swapchain_view, resources.sets[resources.sets.len - 1]);
     return resources;
+}
+
+
+fn mipmapOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
+    const box_offset = mimapBoxOffset(extent, level);
+    const box_extent = mimapBoxExtent(extent, level);
+    const mm_extent = mipmapExtent(extent, level);
+    return .{
+        .x = box_offset.x + @as(i32, @intCast((box_extent.width  - mm_extent.width)  / 2)),
+        .y = box_offset.y + @as(i32, @intCast((box_extent.height - mm_extent.height) / 2)),
+    };
+}
+inline fn mipmapExtent(extent: vk.Extent2D, level: u5) vk.Extent2D {
+    return .{
+        .width  = ((extent.width  - 1) >> (level + 1)) + 1,
+        .height = ((extent.height - 1) >> (level + 1)) + 1,
+    };
+}
+inline fn mimapBoxOffset(extent: vk.Extent2D, level: u5) vk.Offset2D {
+    return if (level & 1 == 0)
+        .{ .x = @intCast(extent.width >> (level / 2 + 1)), .y = 0 }
+    else
+        .{ .x = 0, .y = @intCast(extent.height >> ((level + 1) / 2)) }
+    ;
+}
+inline fn mimapBoxExtent(extent: vk.Extent2D, level: u5) vk.Extent2D {
+    return .{
+        .width  = ((extent.width  - 1) >> ((level / 2) + 1)) + 1,
+        .height = ((extent.height - 1) >> ((level + 1) / 2)) + 1,
+    };
+}
+
+fn bmipmapOffset(extent: vk.Extent2D, level: u5, src: bool) vk.Offset2D {
+    var box_offset = mimapBoxOffset(extent, level);
+    var box_extent = mimapBoxExtent(extent, level);
+    var mm_extent = mipmapExtent(extent, level);
+    if (src and mm_extent.width  & 1 == 1) {
+        box_offset.x -= 1;
+        box_extent.width += 1;
+        mm_extent.width += 1;
+    }
+    if (src and mm_extent.height & 1 == 1) {
+        box_offset.y -= 1;
+        box_extent.height += 1;
+        mm_extent.height += 1;
+    }
+    return .{
+        .x = box_offset.x + @as(i32, @intCast((box_extent.width  - mm_extent.width)  / 2)),
+        .y = box_offset.y + @as(i32, @intCast((box_extent.height - mm_extent.height) / 2)),
+    };
+}
+fn bmipmapExtent(extent: vk.Extent2D, level: u5, src: bool) vk.Extent2D {
+    var mm_extent = mipmapExtent(extent, level);
+    if (src and mm_extent.width  & 1 == 1) mm_extent.width  += 1;
+    if (src and mm_extent.height & 1 == 1) mm_extent.height += 1;
+    return mm_extent;
+}
+fn bmipmapScaler(extent: vk.Extent2D) f32 {
+    var scale: f32 = 1;
+    var w = extent.width / 2;
+    while (w > 1) {
+        if (w & 1 == 1) {
+            scale *= @as(f32, @floatFromInt(w + 1)) / @as(f32, @floatFromInt(w));
+            w = (w + 1) / 2;
+        } else {
+            w = w / 2;
+        }
+    }
+    var h = extent.width / 2;
+    while (h > 1) {
+        if (h & 1 == 1) {
+            scale *= @as(f32, @floatFromInt(h + 1)) / @as(f32, @floatFromInt(h));
+            h = (h + 1) / 2;
+        } else {
+            h = h / 2;
+        }
+    }
+    return scale;
 }

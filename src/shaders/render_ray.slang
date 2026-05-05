@@ -11,19 +11,16 @@ RWTexture2D<float4, 1> ray_tex;
 RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_compression_tex;
 
 [vk_binding(2, 1)]
-RWTexture2D<float4> ray_tag_tex;
+RWTexture2D<float4, 1> ray_tag_tex;
 
 [vk_binding(3, 1)]
-RWTexture2D<float4> _unused_4;
-
-[vk_binding(0, 2)] [format("rgba8")]
-RWTexture2D<float4> surface;
+RWTexture2D<float4, 1> color_output_tex;
 
 
 [shader("compute")] [numthreads(16, 16, 1)]
 void main(uint3 thread_id: SV_DispatchThreadID) {
     uint2 extent;
-    surface.GetDimensions(extent.x, extent.y);
+    color_output_tex.GetDimensions(extent.x, extent.y);
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
     RayTag ray_tag = bit_cast<RayTag>(ray_tag_tex.Load(thread_id.xy)[0]);
@@ -60,26 +57,30 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
         // after falling into the black hole, the light in front of observer is coming from
         // the region between event horizon and the current position of the observer
         color = {0.0, 0.0, 0.0};
-    } else if (ray_polar[0] <= 10.0 * schwarzschild::radius) {
+    } /*else if (ray_polar[0] <= 10.0 * schwarzschild::radius) {
         // just a warning for the light simulation not "finished"
         color = {0.0, 0.0, 0.5};
-    } else {
+    }*/ else {
         color = renderCelestialSphere(normalize(ray_direction), freq_scale);
     }
 
-    // crosshair
-    color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
-
-    surface.Store(thread_id.xy, float4(color, 1.0));
+    color_output_tex.Store(thread_id.xy, float4(max(0.0, color), 1.0));
 }
 
 
 float starfieldBright(float3 direction) {
-    const float scale = 200.0;
+    const float scale1 = 200.0;
+    const float amplitude_1 = 0.45;
+    const float scale2 = 150.0;
+    const float amplitude_2 = 0.45;
+    const float scale3 = 100.0;
+    const float amplitude_3 = 0.3;
 
-    float noise = simplexNoise3(direction * scale);
-    float base = clamp(noise * 0.5 + 0.5, 0.0, 1.0);
-    return 1.2 * sqr(cub(cub(base)));
+    float noise = amplitude_1 * simplexNoise3(direction * scale1);
+    noise += amplitude_2 * simplexNoise3(direction * scale2);
+    noise += amplitude_3 * simplexNoise3(direction * scale3);
+    float base = max(0.0, noise * 0.5 + 0.5);
+    return cub(cub(base));
 }
 
 float starfieldTemp(float3 direction) {
@@ -89,7 +90,7 @@ float starfieldTemp(float3 direction) {
     return noiseToTemp(clamp(noise * 0.3 + 0.5, 0.0, 1.0));
 }
 
-float nebulaeBright(float3 direction) {
+float nebulaBright(float3 direction) {
     const float scale_1 = 1.0;
     const float amplitude_1 = 0.7;
     const float scale_2 = 5.0;
@@ -99,10 +100,10 @@ float nebulaeBright(float3 direction) {
     const float scale_4 = 20.0;
     const float amplitude_4 = 0.035;
 
-    float nebulae = amplitude_1 * simplexNoise3(direction * scale_1);
+    float nebula = amplitude_1 * simplexNoise3(direction * scale_1);
     float milky_way = 0.8 * (1.0 - 3.2 * sqr(direction.z));
     float mix = 0.15 + 5.0 * sqr(direction.z) - (0.07 * direction.x);
-    float base = clamp(lerp(milky_way, nebulae, min(1.0, mix)), 0.0, 1.0);
+    float base = clamp(lerp(milky_way, nebula, min(1.0, mix)), 0.0, 1.0);
 
     float noise = amplitude_2 * simplexNoise3(direction * scale_2);
     noise += amplitude_3 * simplexNoise3(direction * scale_3);
@@ -114,7 +115,7 @@ float nebulaeBright(float3 direction) {
     return sqr(base * cub(noise_base));
 }
 
-float nebulaeTemp(float3 direction) {
+float nebulaTemp(float3 direction) {
     const float scale = 2.5;
     const float amplitude = 0.25;
     const float shift = -0.1;
@@ -150,11 +151,8 @@ float3 renderBlackBody(float bright, float temp, float freq_scale) {
     bright *= sqr(sqr(freq_scale));
     temp *= freq_scale;
 
-    //float bb_bright = black_body::luminance(temp);
-    //float3 bb_color = black_body::relColor(temp);
     float3 bb_color = black_body::color(temp);
 
-    //float abs_bright = bright_norm * bb_bright * bright;
     float abs_bright = bright_norm * bright;
     return abs_bright * bb_color;
 }
@@ -168,11 +166,10 @@ float3 renderCelestialSphere(float3 direction, float freq_scale) {
     float starfield_temp = starfieldTemp(direction);
     color += renderBlackBody(starfield_bright, starfield_temp, freq_scale);
 
-    // nebulae
-    float nebulae_bright = nebulaeBright(direction);
-    float nebulae_temp = nebulaeTemp(direction);
-    color += renderBlackBody(nebulae_bright, nebulae_temp, freq_scale);
+    // nebula
+    float nebula_bright = nebulaBright(direction);
+    float nebula_temp = nebulaTemp(direction);
+    color += 0.3 * renderBlackBody(nebula_bright, nebula_temp, freq_scale);
 
-    // tone mapping
-    return acesToneMap(color);
+    return color;
 }

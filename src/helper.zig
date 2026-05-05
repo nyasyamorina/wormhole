@@ -85,3 +85,49 @@ pub fn Timer(comptime tags: []const @TypeOf(.enum_literal), comptime smooth: f32
         }
     };
 }
+
+
+pub const multi_array = struct {
+    pub fn Child(comptime M: type) type {
+        switch (@typeInfo(M)) {
+            .array => |info| return Child(info.child),
+            else => return M,
+        }
+    }
+
+    pub fn axes(comptime M: type) comptime_int {
+        switch (@typeInfo(M)) {
+            .array => |info| return 1 + axes(info.child),
+            else => return 0,
+        }
+    }
+
+    pub fn size(comptime M: type, comptime axis: usize) comptime_int {
+        if (axis == 0) return @typeInfo(M).array.len;
+        return size(@typeInfo(M).array.child, axis - 1);
+    }
+
+    pub fn len(comptime M: type) comptime_int {
+        var l = 1;
+        for (0 .. axes(M)) |axis| l *= size(M, axis);
+        return l;
+    }
+
+    pub fn AsFlat(comptime M: type) type {
+        return [len(M)]Child(M);
+    }
+
+    pub fn Similar(comptime A: type, comptime E: type) type {
+        switch (@typeInfo(A)) {
+            .array => |info| {
+                return @Type(.{ .array = .{
+                    .len = info.len,
+                    .child = Similar(info.child, E),
+                    .sentinel_ptr = null,
+                } });
+            },
+            else => return E,
+        }
+    }
+
+};
