@@ -49,16 +49,10 @@ pub const Camera = extern struct {
     v: [3]f32 align(16),
 };
 
-pub const uniforms = struct {
-    pub const init_ray = extern struct {
-        camera: Camera,
-        position: [4]f32 align(16),
-        speed: [3]f32 align(16),
-    };
-
-    pub const render_ray = extern struct {
-        _placeholder: f32,
-    };
+pub const Uniform = struct {
+    camera: Camera,
+    position: [4]f32 align(16),
+    speed: [3]f32 align(16),
 };
 
 pub const set_layout = struct {

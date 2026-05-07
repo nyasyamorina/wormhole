@@ -91,8 +91,7 @@ pub fn main() !void {
                 }
             }
 
-            try resources.beginSettingUniforms();
-            resources.uniform(.init_ray).* = .{
+            (try resources.beginSettingUniforms()).* = .{
                 .camera = controller.camera.into(),
                 .position = controller.position,
                 .speed = controller.velocity,
