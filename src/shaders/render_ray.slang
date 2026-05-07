@@ -44,8 +44,8 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     // although `k * any` is a valid ray, and has the same direction as `ray`, but its time component is changed,
     // and that is what cause the wavelength of light changed.
     // because we are sending light "back in time", the time component is negative.
-    float freq_scale = ray_plane_y_axis_and_ray_compression.w;
-    freq_scale *= 1.0 - schwarzschild::radius / ray_polar[0]; // correction for the finite simulation
+    float wave_length_scale = ray_plane_y_axis_and_ray_compression.w;
+    wave_length_scale *= 1.0 - schwarzschild::radius / ray_polar[0]; // correction for the finite simulation
 
     float3 color;
 
@@ -61,7 +61,7 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
         // just a warning for the light simulation not "finished"
         color = {0.0, 0.0, 0.5};
     }*/ else {
-        color = renderCelestialSphere(normalize(ray_direction), freq_scale);
+        color = renderCelestialSphere(normalize(ray_direction), wave_length_scale);
     }
 
     color_output_tex.Store(thread_id.xy, float4(max(0.0, color), 1.0));
@@ -142,34 +142,84 @@ float noiseToTemp(float noise) {
     return 1.0 / mired;
 }
 
-float3 renderBlackBody(float bright, float temp, float freq_scale) {
+float3 renderBlackBody(float bright, float temp, float wave_length_scale) {
     // normalize the black body radiation to target brightness
-    float bright_norm = 1.0 / black_body::luminance(temp);
+    bright /= black_body::luminance(temp);
 
     // in black body radiation, wavelength scaling can be calculated by scaling temperature and brightness instead.
     // `B(λ,T) dλ -> B(sλ,T) d(sλ) = B(λ,sT)/s^4 dλ`
-    bright *= sqr(sqr(freq_scale));
-    temp *= freq_scale;
+    bright /= sqr(sqr(wave_length_scale));
+    temp *= wave_length_scale;
 
-    float3 bb_color = black_body::color(temp);
-
-    float abs_bright = bright_norm * bright;
-    return abs_bright * bb_color;
+    return bright * black_body::color(temp);
 }
 
 /// `direction`: normalized
-float3 renderCelestialSphere(float3 direction, float freq_scale) {
+float3 renderCelestialSphere(float3 direction, float wave_length_scale) {
     float3 color = 0.0;
 
     // starfield
     float starfield_bright = starfieldBright(direction);
     float starfield_temp = starfieldTemp(direction);
-    color += renderBlackBody(starfield_bright, starfield_temp, freq_scale);
+    color += renderBlackBody(starfield_bright, starfield_temp, wave_length_scale);
 
     // nebula
     float nebula_bright = nebulaBright(direction);
     float nebula_temp = nebulaTemp(direction);
-    color += 0.3 * renderBlackBody(nebula_bright, nebula_temp, freq_scale);
+    color += 0.3 * renderBlackBody(nebula_bright, nebula_temp, wave_length_scale);
 
     return color;
+}
+
+
+/// `direction`: normalized
+float3 renderExoticCelestialSphere(float3 direction, float wave_length_scale) {
+    float3 params = starNestParams(direction);
+
+    return float3(params);
+}
+
+/// from "https://www.shadertoy.com/view/XlfGRj"
+float3 starNestParams(float3 direction) {
+    const uint iterations = 17;
+    const float formuparam = 0.53;
+    const uint volsteps = 20;
+    const float stepsize = 0.1;
+    const float tile = 0.85;
+    const float brightness = 0.0015;
+    const float distfading = 0.73;
+    const float saturation = 0.85;
+    const float3 from = {1.0, 0.5, 0.0};
+
+    float s = 0.1; float fade = 1.0;
+    float3 v = 0.0;
+    for (uint r = 0; r < volsteps; r++) {
+        float3 p = 0.5 * s * direction + from;
+        p = abs(tile - fmod(p, 2.0 * tile));
+        float pa = 0.0; float a = 0.0;
+        for (uint i = 0; i < iterations; i++) {
+            p = abs(p) / dot(p, p) - formuparam;
+            a += abs(length(p) - pa);
+            pa = length(p);
+        }
+        v += float3(s, sqr(s), sqr(sqr(s))) * cub(a) * brightness * fade;
+        fade *= distfading;
+        s += stepsize;
+    }
+    v = lerp(length(v), v, saturation);
+    v *= 0.01;
+    v /= v + 1.0;
+    return v;
+}
+
+float3 renderStarNest(float3 params, float wave_length_scale) {
+    float3 color = 0.0;
+    float wave_length = cie::table_wave_length_begin;
+    for (uint k = 0; k < cie::XYZ_table.getCount(); k++) {
+        wave_length += cie::table_wave_length_step;
+    }
+    return cie::table_wave_length_step * cie::XYZ_to_linear_sRGB(color);
+}
+float startNestSpetrum(float wave_length, float c, float a) {
+    return a / (abs(wave_length - c) + a);
 }
