@@ -64,6 +64,16 @@ The program itself (`special-relativity.exe` or `special-relativity`) is insuffi
 
 ---
 
+## Build
+
+You need [zig 0.16.x](https://ziglang.org/download/)，then run `zig build --release=small` or `zig build -Doptimize=ReleaseSmall` in the project folder.
+
+    Windows users need to place "pack-stuff/windows/glfw3.dll" in the same folder as the compiled executable file.
+
+- You might need to use `zig build --fork=<...>` to bypass network restrictions; see [the zig official introduction](https://ziglang.org/download/0.16.0/release-notes.html#Ability-to-Override-Packages-Locally).
+
+---
+
 ## Issue Feedback
 
 Please open an issue in the repository.

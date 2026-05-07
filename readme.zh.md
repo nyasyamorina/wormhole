@@ -66,6 +66,16 @@
 
 ---
 
+## 构建
+
+你需要 [zig 0.16.x](https://ziglang.org/download/)，然后在项目文件夹里运行 `zig build --release=small` 或 `zig build -Doptimize=ReleaseSmall`.
+
+    Windows 用户需要把 "pack-stuff/windows/glfw3.dll" 放到与编译输出的可执行文件同一个文件夹内。
+
+- 你可能需要使用 `zig build --fork=<...>` 来绕过网络限制，见[zig 的官方介绍](https://ziglang.org/download/0.16.0/release-notes.html#Ability-to-Override-Packages-Locally)。
+
+---
+
 ## 问题反馈
 
 请在仓库里开 issue。

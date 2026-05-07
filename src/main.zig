@@ -11,17 +11,16 @@ const Controller = @import("Controller.zig");
 
 
 pub const std_options: std.Options = .{
-    .logFn = helper.logger,
     .fmt_max_depth = 10,
 };
 
-pub fn main() !void {
-    try helper.init();
+pub fn main(init: std.process.Init) !void {
+    try helper.init(init.io);
     defer helper.deinit();
 
     var args: Arguments = try .init();
     defer args.deinit();
-    try args.load(false);
+    try args.load(init.minimal.args, false);
 
     if (!glfw.init()) {
         const result = glfw.getError();
@@ -82,7 +81,7 @@ pub fn main() !void {
 
             controller.step(dt);
 
-            if (!print_state_failed and vk_ctx.frame_timestamp - last_print_state_time >= std.time.ns_per_s / 2) {
+            if (!print_state_failed and last_print_state_time.durationTo(vk_ctx.frame_timestamp).nanoseconds >= std.time.ns_per_s / 2) {
                 if (controller.printState()) {
                     last_print_state_time = vk_ctx.frame_timestamp;
                 } else |err| {
@@ -110,42 +109,36 @@ const base_shaders = struct {
 };
 
 // null stage for `utils.slang`
-fn writeSlangShader(cwd: std.fs.Dir, name: []const u8, stage: ?shader_layout.Stage) !void {
+fn writeSlangShader(cwd: std.Io.Dir, name: []const u8, stage: ?shader_layout.Stage) !void {
     std.log.debug("extracting shader file {s}", .{name});
     const xz_data = if (stage) |s| s.getNamedStatic(base_shaders) else base_shaders.utils;
 
-    const file = try cwd.createFile(name, .{});
-    defer file.close();
+    const file = try cwd.createFile(helper.io, name, .{});
+    defer file.close(helper.io);
 
     const write_buf = try helper.allocator.alloc(u8, 4096);
     defer helper.allocator.free(write_buf);
-    var writer = file.writer(write_buf);
+    var writer = file.writer(helper.io, write_buf);
 
     var xz_reader = std.Io.Reader.fixed(xz_data);
-    const old_xz_reader: std.Io.GenericReader(*std.Io.Reader, std.Io.Reader.Error, std.Io.Reader.readSliceShort) = .{ .context = &xz_reader };
-    var decompresser = try std.compress.xz.decompress(helper.allocator, old_xz_reader);
+    var decompresser: std.compress.xz.Decompress = try .init(&xz_reader, helper.allocator, &.{});
     defer decompresser.deinit();
 
-    const old_reader = decompresser.reader();
-    var reader = old_reader.adaptToNewApi(&.{});
-
-    _ = try reader.new_interface.streamRemaining(&writer.interface);
+    _ = try decompresser.reader.streamRemaining(&writer.interface);
     try writer.interface.flush();
 }
 
-fn compileSlangShader(cwd: if (helper.is_windows) []const u8 else std.fs.Dir, slangc: []const u8, stage: shader_layout.Stage, out: []const u8) !void {
+fn compileSlangShader(cwd: std.Io.Dir, slangc: []const u8, stage: shader_layout.Stage, out: []const u8) !void {
     const in = try std.fmt.allocPrint(helper.allocator, "{s}.slang", .{@tagName(stage)});
     defer helper.allocator.free(in);
 
-    const cwd_dir = if (helper.is_windows) try helper.cwd.openDir(cwd, .{}) else cwd;
-
-    cwd_dir.access(in, .{}) catch |err| switch (err) {
+    cwd.access(helper.io, in, .{}) catch |err| switch (err) {
         error.FileNotFound => {
-            cwd_dir.access("utils.slang", .{}) catch |err2| switch (err2) {
-                error.FileNotFound => try writeSlangShader(cwd_dir, "utils.slang", null),
+            cwd.access(helper.io, "utils.slang", .{}) catch |err2| switch (err2) {
+                error.FileNotFound => try writeSlangShader(cwd, "utils.slang", null),
                 else => return err2,
             };
-            try writeSlangShader(cwd_dir, in, stage);
+            try writeSlangShader(cwd, in, stage);
         },
         else => return err,
     };
@@ -163,12 +156,11 @@ fn compileSlangShader(cwd: if (helper.is_windows) []const u8 else std.fs.Dir, sl
     args[0] = slangc;
     args[1] = in;
     args[3] = out;
-    var process: std.process.Child = .init(&args, helper.allocator);
-    if (helper.is_windows) {
-        process.cwd = cwd;
-    } else {
-        process.cwd_dir = cwd;
-    }
+    var process = try std.process.spawn(helper.io, .{
+        .cwd = .{ .dir = cwd },
+        .argv = &args,
+        .stdin = .ignore,
+    });
 
     const shader_compilation = "shader compilation";
     std.log.info("starting {s}:", .{shader_compilation});
@@ -176,17 +168,17 @@ fn compileSlangShader(cwd: if (helper.is_windows) []const u8 else std.fs.Dir, sl
     helper.stdout.interface.print("\n", .{}) catch {};
     helper.stdout.interface.flush() catch {};
 
-    switch (try process.spawnAndWait()) {
-        .Exited => |code| {
+    switch (try process.wait(helper.io)) {
+        .exited => |code| {
             if (code == 0) {
                 std.log.info("{s} success", .{shader_compilation});
                 return;
             }
             std.log.err("{s} exited with {d}", .{shader_compilation, code});
         },
-        .Signal => |code| std.log.err("{s} signal with {d}", .{shader_compilation, code}),
-        .Stopped => |code| std.log.err("{s} stopped with {d}", .{shader_compilation, code}),
-        .Unknown => |code| std.log.err("{s}? code: {d}", .{shader_compilation, code}),
+        .signal => |code| std.log.err("{s} signal with {d}", .{shader_compilation, code}),
+        .stopped => |code| std.log.err("{s} stopped with {d}", .{shader_compilation, code}),
+        .unknown => |code| std.log.err("{s}? code: {d}", .{shader_compilation, code}),
     }
     return error.FailedToCompileShader;
 }
@@ -211,33 +203,32 @@ fn readShaderCode(file_path: []const u8) ![]align(4) const u8 {
 
 fn buildPipelines(vk_ctx: *VulkanContext, slangc: []const u8, shader_folder: ?[]const u8) !void {
     var shader_dir = if (shader_folder) |f| blk: {
-        break :blk helper.cwd.openDir(f, .{}) catch |err| switch (err) {
+        break :blk helper.cwd.openDir(helper.io, f, .{}) catch |err| switch (err) {
             error.FileNotFound => {
-                try helper.cwd.makePath(f);
-                break :blk try helper.cwd.openDir(f, .{});
+                try helper.cwd.createDirPath(helper.io, f);
+                break :blk try helper.cwd.openDir(helper.io, f, .{});
             },
             else => return err,
         };
     } else helper.cwd;
-    defer if (shader_folder != null) shader_dir.close();
+    defer if (shader_folder != null) shader_dir.close(helper.io);
 
     for (shader_layout.Stage.all) |stage| {
         std.log.info("building pipeline {s}", .{@tagName(stage)});
         const spv_file_name = try std.fmt.allocPrint(helper.allocator, "{s}.spv", .{@tagName(stage)});
         defer helper.allocator.free(spv_file_name);
 
-        const spv_file = shader_dir.openFile(spv_file_name, .{}) catch |err| switch (err) {
+        const spv_file = shader_dir.openFile(helper.io, spv_file_name, .{}) catch |err| switch (err) {
             error.FileNotFound => blk: {
-                const compile_cwd = if (helper.is_windows) shader_folder orelse "" else shader_dir;
-                try compileSlangShader(compile_cwd, slangc, stage, spv_file_name);
-                break :blk try shader_dir.openFile(spv_file_name, .{});
+                try compileSlangShader(shader_dir, slangc, stage, spv_file_name);
+                break :blk try shader_dir.openFile(helper.io, spv_file_name, .{});
             },
             else => return err,
         };
-        defer spv_file.close();
-        var reader = spv_file.reader(&.{});
+        defer spv_file.close(helper.io);
+        var reader = spv_file.reader(helper.io, &.{});
 
-        const stat = try spv_file.stat();
+        const stat = try spv_file.stat(helper.io);
         const code = try helper.allocator.alloc(u32, stat.size / 4);
         defer helper.allocator.free(code);
         try reader.interface.readSliceAll(std.mem.sliceAsBytes(code));

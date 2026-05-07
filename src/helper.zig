@@ -10,33 +10,24 @@ pub const is_debug = builtin.mode == .Debug;
 pub const is_safe_mode = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
 
 
-pub fn logger(comptime level: std.log.Level, comptime scope: @Type(.enum_literal), comptime format: []const u8, args: anytype) void {
-    const scope_name = switch (scope) {
-        .default => "",
-        else => "(" ++ @tagName(scope) ++ ")",
-    };
-    const log_format = scope_name ++ " [" ++ comptime level.asText() ++ "]: " ++ format ++ "\n";
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-    var stderr = std.fs.File.stderr().writer(&.{});
-    nosuspend stderr.interface.print(log_format, args) catch {};
-}
-
-
 var debug_alloc: if (is_safe_mode) std.heap.DebugAllocator(.{}) else void = if (is_safe_mode) .init else undefined;
 pub const allocator: std.mem.Allocator = if (is_safe_mode) debug_alloc.allocator() else std.heap.c_allocator;
 
-pub var cwd: std.fs.Dir = undefined;
+pub var io: std.Io = undefined;
+
+pub var cwd: std.Io.Dir = undefined;
 
 var stdout_buff: [512]u8 = undefined;
-var stdout_handle: std.fs.File = undefined;
-pub var stdout: std.fs.File.Writer = undefined;
+var stdout_handle: std.Io.File = undefined;
+pub var stdout: std.Io.File.Writer = undefined;
 
-pub fn init() !void {
-    cwd = std.fs.cwd();
+pub fn init(in_io: std.Io) !void {
+    io = in_io;
+
+    cwd = .cwd();
 
     stdout_handle = .stdout();
-    stdout = stdout_handle.writer(&stdout_buff);
+    stdout = stdout_handle.writer(io, &stdout_buff);
 }
 
 pub fn deinit() void {
