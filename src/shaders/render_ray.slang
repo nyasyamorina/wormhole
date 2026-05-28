@@ -8,7 +8,7 @@ ConstantBuffer<Uniform> uniform;
 RWTexture2D<float4> ray_direction_tex;
 
 [vk_binding(1, 1)]
-RWTexture2D<float4> brightness_scale_tex;
+RWTexture2D<float4> wavelength_brightness_scale_tex;
 
 [vk_binding(2, 1)]
 RWTexture2D<float4> _unused_3;
@@ -27,32 +27,27 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
     float4 ray = ray_direction_tex.Load(thread_id.xy);
-    float brightness_scale = brightness_scale_tex.Load(thread_id.xy)[0];
+    float2 wavelength_brightness_scale = wavelength_brightness_scale_tex.Load(thread_id.xy).xy;
+    float wavelength_scale = wavelength_brightness_scale[0];
+    float brightness_scale = wavelength_brightness_scale[1];
 
-    // note that the Doppler effect in relativity is purely cause by coordinate transformation,
-    // because `ray` has 0 space-time length, `k * ray` also has 0 space-time length, where `k` is any real number,
-    // although `k * any` is a valid ray, and has the same direction as `ray`, but its time component is changed,
-    // and that is what cause the wavelength of light changed.
-    // because we are sending light "back in time", the time component is negative.
-    float wave_length_scale = -1.0 / ray.w;
-
-    float3 ray_space = normalize(ray.xyz);
     float3 color = 0.0;
 
     // starfield
-    float starfield_bright = starfieldBright(ray_space);
-    float starfield_temp = starfieldTemp(ray_space);
-    color += renderBlackBody(starfield_bright, starfield_temp, wave_length_scale);
+    float starfield_bright = starfieldBright(ray.xyz);
+    float starfield_temp = starfieldTemp(ray.xyz);
+    color += renderBlackBody(starfield_bright, starfield_temp, wavelength_scale);
 
     // nebulae
-    float nebulae_bright = nebulaeBright(ray_space);
-    float nebulae_temp = nebulaeTemp(ray_space);
-    color += renderBlackBody(nebulae_bright, nebulae_temp, wave_length_scale);
+    float nebulae_bright = nebulaeBright(ray.xyz);
+    float nebulae_temp = nebulaeTemp(ray.xyz);
+    color += renderBlackBody(nebulae_bright, nebulae_temp, wavelength_scale);
 
     color *= brightness_scale;
 
     // tone mapping
     color = acesToneMap(color);
+    color = clamp(color, 0.0, 1.0);
 
     // crosshair
     color = lerp(color, 1.0 - color, crosshair(thread_id.xy, extent));
@@ -135,11 +130,12 @@ float noiseToTemp(float noise) {
     return 1.0 / mired;
 }
 
-float3 renderBlackBody(float bright, float temp, float wave_length_scale) {
+float3 renderBlackBody(float bright, float temp, float wavelength_scale) {
     // normalize the black body radiation to target brightness
     bright /= black_body::luminance(temp);
 
     // in black body radiation, wavelength scaling can be calculated by scaling temperature and brightness instead.
-    // `B(λ,T) dλ -> B(sλ,T) d(sλ) = B(λ,sT)/s^4 dλ`
-    return bright / sqr(sqr(wave_length_scale)) * black_body::color(temp * wave_length_scale);
+    // `B(sλ,T) = B(λ,sT)/s^5`
+    float bright_scale = sqr(sqr(wavelength_scale)) * wavelength_scale;
+    return bright / bright_scale * black_body::color(temp * wavelength_scale);
 }
