@@ -52,11 +52,11 @@ pub fn build(b: *std.Build) !void {
 
 
 fn addCompressedShaders(b: *std.Build, module: *std.Build.Module) !void {
-    var shader_dir = try b.path("src/shaders/").getPath3(b, null).openDir(".", .{ .iterate = true });
-    defer shader_dir.close();
+    var shader_dir = try b.path("src/shaders/").getPath3(b, null).openDir(b.graph.io, ".", .{ .iterate = true });
+    defer shader_dir.close(b.graph.io);
 
     var iter = shader_dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(b.graph.io)) |entry| {
         if (entry.kind == .file) {
             const shader_path = try std.fs.path.join(b.allocator, &.{"src/shaders", entry.name});
             defer b.allocator.free(shader_path);
@@ -67,7 +67,7 @@ fn addCompressedShaders(b: *std.Build, module: *std.Build.Module) !void {
 
             var xz = b.addSystemCommand(&.{ "xz", "-zkc9e" });
             xz.addFileArg(b.path(shader_path));
-            module.addAnonymousImport(output_name, .{ .root_source_file = xz.captureStdOut() });
+            module.addAnonymousImport(output_name, .{ .root_source_file = xz.captureStdOut(.{}) });
         }
     }
 }

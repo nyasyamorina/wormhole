@@ -204,9 +204,9 @@ pub fn deinit(self: Arguments) void {
     }
 }
 
-pub fn load(self: *Arguments, allow_extra: bool) !void {
-    var iter = try std.process.argsWithAllocator(helper.allocator);
-    defer iter.deinit();
+pub fn load(self: *Arguments, args: std.process.Args, allow_extra: bool) !void {
+    var iter = if (helper.is_windows) try args.iterateAllocator(helper.allocator) else args.iterate();
+    defer if (helper.is_windows) iter.deinit();
 
     _ = iter.skip();
     next_arg: while (iter.next()) |arg| {

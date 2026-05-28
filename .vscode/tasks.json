@@ -1,0 +1,20 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build debug",
+            "type": "shell",
+            "command": "zig build -freference-trace=100 -Doptimize=Debug",
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "remove zig-out/bin/shaders",
+            "type": "shell",
+            "command": "rm -rf ./zig-out/bin/shaders",
+        },
+    ]
+}

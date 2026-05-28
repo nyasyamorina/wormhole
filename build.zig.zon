@@ -1,7 +1,7 @@
 .{
     .name = .wormhole,
-    .version = "0.0.1",
-    .minimum_zig_version = "0.15.2",
+    .version = "1.0.0",
+    .minimum_zig_version = "0.16.0",
     .fingerprint = 0xd0888657d7145c9a,
 
     .paths = .{
@@ -13,16 +13,17 @@
 
     .dependencies = .{
         .vulkan_zig = .{
-            .url = "https://github.com/Snektron/vulkan-zig/archive/refs/heads/zig-0.15-compat.tar.gz",
-            .hash = "vulkan-0.0.0-r7Ytx6FIAwD3QyrrJhvObO0YSZ6WEkMGSCPKbhM__HFd",
+            // waiting for `zi-0.16-comppat` branch
+            .url = "https://github.com/Snektron/vulkan-zig/archive/refs/heads/master.tar.gz",
+            .hash = "vulkan-0.0.0-r7Ytx759AwBNdwE-gHKt3vzRQaU7RFerBg3FmD7iTEv4",
         },
         .vk_hdrs = .{
-            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.344.tar.gz",
-            .hash = "N-V-__8AALnKOwISs8TmtQCFcJgDTE9kRnMhQCrbaafF5DD0",
+            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.4.350.tar.gz",
+            .hash = "N-V-__8AAPnEbQK6L3hGtJefy0xZjeg7KOxIEj8_obZC2_lF",
         },
         .nyazglfw = .{
             .url = "https://github.com/nyasyamorina/nyazglfw/archive/refs/heads/main.tar.gz",
-            .hash = "nyazglfw-0.1.2-axZni7sdAQACQGksgQ6ufkG4ugZ3fFK-PQNkBHNYhs84",
+            .hash = "nyazglfw-0.1.2-axZnixsdAQALBtJ34DeofMrkCPTK_DMyR4lefS1S-K8Q",
         },
     },
 }

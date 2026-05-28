@@ -10,36 +10,27 @@ pub const is_debug = builtin.mode == .Debug;
 pub const is_safe_mode = builtin.mode == .Debug or builtin.mode == .ReleaseSafe;
 
 
-pub fn logger(comptime level: std.log.Level, comptime scope: @Type(.enum_literal), comptime format: []const u8, args: anytype) void {
-    const scope_name = switch (scope) {
-        .default => "",
-        else => "(" ++ @tagName(scope) ++ ")",
-    };
-    const log_format = scope_name ++ " [" ++ comptime level.asText() ++ "]: " ++ format ++ "\n";
-    std.debug.lockStdErr();
-    defer std.debug.unlockStdErr();
-    var stderr = std.fs.File.stderr().writer(&.{});
-    nosuspend stderr.interface.print(log_format, args) catch {};
-}
-
-
 var debug_alloc: if (is_safe_mode) std.heap.DebugAllocator(.{}) else void = if (is_safe_mode) .init else undefined;
 pub const allocator: std.mem.Allocator = if (is_safe_mode) debug_alloc.allocator() else std.heap.c_allocator;
 
-pub var cwd: std.fs.Dir = undefined;
+pub var io: std.Io = undefined;
+
+pub var cwd: std.Io.Dir = undefined;
 
 var stdout_buff: [512]u8 = undefined;
-var stdout_handle: std.fs.File = undefined;
-pub var stdout: std.fs.File.Writer = undefined;
+var stdout_handle: std.Io.File = undefined;
+pub var stdout: std.Io.File.Writer = undefined;
 
 pub const line_break = if (is_windows) "\r\n" else "\n";
 pub const clear_line_and_break = "\x1b[K" ++ line_break;
 
-pub fn init() !void {
-    cwd = std.fs.cwd();
+pub fn init(in_io: std.Io) !void {
+    io = in_io;
+
+    cwd = .cwd();
 
     stdout_handle = .stdout();
-    stdout = stdout_handle.writer(&stdout_buff);
+    stdout = stdout_handle.writer(io, &stdout_buff);
 }
 
 pub fn deinit() void {
@@ -52,7 +43,7 @@ pub fn deinit() void {
 pub fn Timer(comptime tags: []const @TypeOf(.enum_literal), comptime smooth: f32) type {
     return struct {
         state: [tags.len]f32,
-        timestamps: [tags.len]i128,
+        timestamps: [tags.len]std.Io.Timestamp,
 
         pub const init: @This() = .{
             .state = std.mem.zeroes([tags.len]f32),
@@ -68,13 +59,13 @@ pub fn Timer(comptime tags: []const @TypeOf(.enum_literal), comptime smooth: f32
 
         pub fn start(self: *@This(), comptime tag: @TypeOf(.enum_literal)) void {
             const idx = tagIndex(tag);
-            self.timestamps[idx] = std.time.nanoTimestamp();
+            self.timestamps[idx] = .now(io, .real);
         }
 
         pub fn stop(self: *@This(), comptime tag: @TypeOf(.enum_literal)) void {
             const idx = tagIndex(tag);
-            const time = std.time.nanoTimestamp() - self.timestamps[idx];
-            self.state[idx] = smooth * self.state[idx] + (1 - smooth) * @as(f32, @floatFromInt(time)) / std.time.ns_per_ms;
+            const dur = self.timestamps[idx].durationTo(.now(io, .real));
+            self.state[idx] = smooth * self.state[idx] + (1 - smooth) * @as(f32, @floatFromInt(dur.nanoseconds)) / std.time.ns_per_ms;
         }
 
         pub fn report(self: @This()) !void {
@@ -119,15 +110,8 @@ pub const multi_array = struct {
 
     pub fn Similar(comptime A: type, comptime E: type) type {
         switch (@typeInfo(A)) {
-            .array => |info| {
-                return @Type(.{ .array = .{
-                    .len = info.len,
-                    .child = Similar(info.child, E),
-                    .sentinel_ptr = null,
-                } });
-            },
+            .array => |info| return [info.len]Similar(info.child, E),
             else => return E,
         }
     }
-
 };

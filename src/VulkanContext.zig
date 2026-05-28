@@ -287,7 +287,7 @@ fn _createInstance(allocator: std.mem.Allocator) !vk.InstanceProxy {
     return .init(handle, &instance_wrapper);
 }
 
-fn debugMessengerCallback(m_severity: vk.DebugUtilsMessageSeverityFlagsEXT, m_types: vk.DebugUtilsMessageTypeFlagsEXT, callback_data: *const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(vk.vulkan_call_conv) vk.Bool32 {
+fn debugMessengerCallback(m_severity: vk.DebugUtilsMessageSeverityFlagsEXT, m_types: vk.DebugUtilsMessageTypeFlagsEXT, callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(vk.vulkan_call_conv) vk.Bool32 {
     const level: std.log.Level = if (m_severity.error_bit_ext)
         .err
     else if (m_severity.warning_bit_ext)
@@ -315,7 +315,9 @@ fn debugMessengerCallback(m_severity: vk.DebugUtilsMessageSeverityFlagsEXT, m_ty
     inline for (type_msg) |tm| if (@as(vk.Flags, @bitCast(m_types)) & tm.@"0" != 0) msg_types.appendSliceAssumeCapacity(tm.@"1" ++ "|");
 
     const log_format = "|{s}> {s}: {s}";
-    const log_args = .{msg_types.items, callback_data.p_message_id_name orelse "", callback_data.p_message orelse ""};
+    const message_id_name = if (callback_data) |cb| cb.p_message_id_name orelse "" else "";
+    const message = if (callback_data) |cb| cb.p_message orelse "" else "";
+    const log_args = .{msg_types.items, message_id_name, message};
 
     const debug_log = std.log.scoped(.debug_utils);
     switch (level) {
@@ -371,22 +373,13 @@ pub fn PhysicalDeviceFeatures(comptime ExtraFeatures: []const type) type {
         core2: vk.PhysicalDeviceFeatures2 = .{ .features = .{} },
 
         pub const Extras = blk: {
-            var fields: [ExtraFeatures.len]std.builtin.Type.StructField = undefined;
-            for (ExtraFeatures, &fields, 0..) |extra, *field, index| {
-                field.* = .{
-                    .name = std.fmt.comptimePrint("{d}", .{index}),
-                    .type = extra,
-                    .default_value_ptr = @ptrCast(&extra {}),
-                    .is_comptime = false,
-                    .alignment = @alignOf(extra),
-                };
+            var field_names: [ExtraFeatures.len][]const u8 = undefined;
+            var field_attrs: [ExtraFeatures.len]std.builtin.Type.StructField.Attributes = undefined;
+            for (ExtraFeatures, 0..) |extra, index| {
+                field_names[index] = std.fmt.comptimePrint("{d}", .{index});
+                field_attrs[index] = .{ .default_value_ptr = @ptrCast(&extra {}) };
             }
-            break :blk @Type(.{ .@"struct" = .{
-                .layout = .auto,
-                .fields = &fields,
-                .decls = &.{},
-                .is_tuple = false,
-            } });
+            break :blk @Struct(.auto, null, &field_names, @ptrCast(ExtraFeatures.ptr), &field_attrs);
         };
 
         pub fn link(self: *@This()) *vk.PhysicalDeviceFeatures2 {
@@ -575,7 +568,7 @@ fn _createCommandPool(device: vk.DeviceProxy, queue_family: u32) !vk.CommandPool
 }
 fn _createCommands(device: vk.DeviceProxy, pool: vk.CommandPool, level: vk.CommandBufferLevel, comptime len: u32) ![len]vk.CommandBuffer {
     var commands = std.mem.zeroes([len]vk.CommandBuffer);
-    errdefer device.freeCommandBuffers(pool, len, @ptrCast(&commands));
+    errdefer device.freeCommandBuffers(pool, &commands);
     try device.allocateCommandBuffers(&.{
         .level = level,
         .command_pool = pool,
@@ -644,7 +637,7 @@ fn _recordGenerateMipmapCommands(commands: SecondaryCommands, images: StorageIma
             },
         });
 
-        command.clearColorImage(mipmap_im, .general, &.{ .float_32 = .{0, 0, 0, 0} }, 1, &.{ .{
+        command.clearColorImage(mipmap_im, .general, &.{ .float_32 = .{0, 0, 0, 0} }, &.{ .{
             .aspect_mask = .{ .color_bit = true },
             .base_mip_level = 0,
             .level_count = 1,
@@ -720,7 +713,7 @@ fn _createSets(device: vk.DeviceProxy, pool: vk.DescriptorPool, layouts: SetLayo
     @memset(&set_layouts, layouts);
 
     var sets = std.mem.zeroes(Sets);
-    errdefer device.freeDescriptorSets(pool, set_count, @ptrCast(&sets)) catch {};
+    errdefer device.freeDescriptorSets(pool, @as(*const multi_array.AsFlat(Sets), @ptrCast(&sets))) catch {};
     try device.allocateDescriptorSets(&.{
         .descriptor_pool = pool,
         .descriptor_set_count = set_count,
@@ -748,7 +741,7 @@ fn _updateUniformDesriptor(device: vk.DeviceProxy, buffers: UniformBuffers, sets
         };
     }
 
-    device.updateDescriptorSets(writes.len, &writes, 0, null);
+    device.updateDescriptorSets(&writes, null);
 }
 fn _updateStorageDescriptor(device: vk.DeviceProxy, views: StorageViews, sets: Sets) void {
     var infos: [in_flight_count][set_layout.storage_count]vk.DescriptorImageInfo = undefined;
@@ -774,10 +767,10 @@ fn _updateStorageDescriptor(device: vk.DeviceProxy, views: StorageViews, sets: S
         };
     };
 
-    device.updateDescriptorSets(in_flight_count * set_layout.storage_count, @ptrCast(&writes), 0, null);
+    device.updateDescriptorSets(@as(*const multi_array.AsFlat(@TypeOf(writes)), @ptrCast(&writes)), null);
 }
 fn _updateSurfaceDescriptor(device: vk.DeviceProxy, view: vk.ImageView, set: vk.DescriptorSet) void {
-    device.updateDescriptorSets(1, &.{ vk.WriteDescriptorSet {
+    device.updateDescriptorSets(&.{ .{
         .descriptor_type = .storage_image,
         .descriptor_count = 1,
         .p_image_info = &.{ vk.DescriptorImageInfo {
@@ -790,7 +783,7 @@ fn _updateSurfaceDescriptor(device: vk.DeviceProxy, view: vk.ImageView, set: vk.
         .dst_array_element = 0,
         .p_buffer_info = undefined,
         .p_texel_buffer_view = undefined,
-    } }, 0, null);
+    } }, null);
 }
 
 fn _createPipelineLayouts(device: vk.DeviceProxy, set_layouts: SetLayouts) !PipelineLayouts {
@@ -1157,7 +1150,7 @@ pub fn buildPipeline(self: *VulkanContext, stage: Stage, code: []const u32) !voi
     defer self.device.destroyShaderModule(module, null);
 
     var pipeline: vk.Pipeline = .null_handle;
-    _ = try self.device.createComputePipelines(.null_handle, 1, &.{ vk.ComputePipelineCreateInfo {
+    _ = try self.device.createComputePipelines(.null_handle, &.{ .{
         .stage = .{
             .stage = .{ .compute_bit = true },
             .module = module,
@@ -1261,7 +1254,7 @@ pub const FrameResouces = struct {
         _storageImageBarrier(command0, self.storage_images, b_compute_rw, b_compute_rw);
         _dispatchComputePipeline(command0, self.pipelines[@intFromEnum(Stage.render_ray)], self.dispatch_group);
         _storageImageBarrier(command0, self.storage_images, b_compute_rw, b_pipe_end);
-        command0.executeCommands(1, @ptrCast(&self.generate_mipmap_command));
+        command0.executeCommands(&.{self.generate_mipmap_command});
         _storageImageBarrier(command0, self.storage_images, b_blit_rw, b_compute_rw);
         _dispatchComputePipeline(command0, self.pipelines[@intFromEnum(Stage.post_process_1)], self.dispatch_group);
         _storageImageBarrier(command0, self.storage_images, b_compute_rw, b_compute_rw);
@@ -1299,7 +1292,7 @@ pub const FrameResouces = struct {
         };
 
         const queue: vk.QueueProxy = .{ .handle = self.queue, .wrapper = &device_wrapper };
-        try queue.submit(sync_count, &.{submit0, submit1}, self.fence);
+        try queue.submit(&.{submit0, submit1}, self.fence);
 
         const present_result = queue.presentKHR(&.{
             .swapchain_count = 1,
@@ -1329,7 +1322,7 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
 
     var wait_count: usize = 0;
     const wait_time = std.time.ns_per_s;
-    while (try self.device.waitForFences(1, &.{fence}, .true, wait_time) == .timeout) {
+    while (try self.device.waitForFences(&.{fence}, .true, wait_time) == .timeout) {
         wait_count += 1;
         log.warn("waiting for frame fence over {d}s", .{wait_count});
     }
@@ -1342,7 +1335,7 @@ pub fn acquireFrame(self: *VulkanContext) !?FrameResouces {
     );
     if (result.result == .not_ready) return null;
 
-    try self.device.resetFences(1, &.{fence});
+    try self.device.resetFences(&.{fence});
 
     const resources: FrameResouces = .{
         .swapchain = self.swapchain,

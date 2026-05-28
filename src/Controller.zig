@@ -82,7 +82,7 @@ pub fn step(self: *Controller, time_step: f32) bool {
 }
 
 
-pub fn printState(self: Controller, time: i128) !void {
+pub fn printState(self: Controller, time: i96) !void {
     const i: math.schwarzschild.InnerAt = .{ .position = self.frame.position };
     const max_err = @max(
         @abs(i.call(self.frame.axis_x, self.frame.axis_x) - -1),
