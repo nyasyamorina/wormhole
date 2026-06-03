@@ -350,15 +350,6 @@ namespace schwarzschild {
         return flat_time - flat_space - tmp * cross_term;
     }
 
-    Optional<float> nullBackwardTime(float r, float2 polar) {
-        float tmp = schwarzschild::radius / r;
-        float delta = sqr(polar[0]) + r * (r - schwarzschild::radius) * sqr(polar[1]);
-        if (delta < 0.0) return none;
-        float tmp1 = _signChanger(tmp * polar[0]);
-        float tmp2 = 1.0 - tmp;
-        return (tmp1 - sqrt(delta)) / tmp2;
-    }
-
     /// the delta of the component values in transpoting `v` along `d` while maintaining `v` parallel.
     ///
     /// this is a variant of the geodesics equation.

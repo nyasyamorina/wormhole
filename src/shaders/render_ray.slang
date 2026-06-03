@@ -172,27 +172,20 @@ float3 renderCelestialSphere(float3 direction, float wave_length_scale) {
 }
 
 
+/// modified from "https://www.shadertoy.com/view/XlfGRj"
 /// `direction`: normalized
 float3 renderExoticCelestialSphere(float3 direction, float wave_length_scale) {
-    float3 params = starNestParams(direction);
-
-    return float3(params);
-}
-
-/// from "https://www.shadertoy.com/view/XlfGRj"
-float3 starNestParams(float3 direction) {
     const uint iterations = 17;
     const float formuparam = 0.53;
     const uint volsteps = 20;
     const float stepsize = 0.1;
     const float tile = 0.85;
-    const float brightness = 0.0015;
-    const float distfading = 0.73;
-    const float saturation = 0.85;
+    const float brightness = 7.5e-7;
+    const float distfading = 0.83;
     const float3 from = {1.0, 0.5, 0.0};
 
     float s = 0.1; float fade = 1.0;
-    float3 v = 0.0;
+    float3 color = 0.0;
     for (uint r = 0; r < volsteps; r++) {
         float3 p = 0.5 * s * direction + from;
         p = abs(tile - fmod(p, 2.0 * tile));
@@ -202,24 +195,24 @@ float3 starNestParams(float3 direction) {
             a += abs(length(p) - pa);
             pa = length(p);
         }
-        v += float3(s, sqr(s), sqr(sqr(s))) * cub(a) * brightness * fade;
+        a *= a * a;
+        color += fade * renderStarNest(0.5 * s, a / (1e-5 * a + 1.0), wave_length_scale);
         fade *= distfading;
         s += stepsize;
     }
-    v = lerp(length(v), v, saturation);
-    v *= 0.01;
-    v /= v + 1.0;
-    return v;
+    color *= brightness;
+    return color * sqrt(color);
 }
 
-float3 renderStarNest(float3 params, float wave_length_scale) {
+float3 renderStarNest(float s, float a, float wave_length_scale) {
     float3 color = 0.0;
-    float wave_length = cie::table_wave_length_begin;
+    float wavelength = cie::table_wave_length_begin;
     for (uint k = 0; k < cie::XYZ_table.getCount(); k++) {
-        wave_length += cie::table_wave_length_step;
+        color += cie::XYZ_table[k] * startNestSpetrum(wavelength * wave_length_scale, s, 0.01 * a);
+        wavelength += cie::table_wave_length_step;
     }
-    return cie::table_wave_length_step * cie::XYZ_to_linear_sRGB(color);
+    return a * cie::table_wave_length_step * cie::XYZ_to_linear_sRGB(color);
 }
-float startNestSpetrum(float wave_length, float c, float a) {
-    return a / (abs(wave_length - c) + a);
+float startNestSpetrum(float wavelength, float s, float a) {
+    return a / (abs(lerp(cie::table_wave_length_begin, cie::table_wave_length_end + 30.0, s) - wavelength) + a);
 }

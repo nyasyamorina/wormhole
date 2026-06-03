@@ -32,7 +32,7 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     // auto exposure
     uint2 target_bright_offset = mipmapOffset(extent, uniform.mipmap_levels - 1);
     float target_bright = mipmap_tex.Load(target_bright_offset).y;
-    color /= max(1e-7, target_bright);
+    color /= 1.5 * max(1e-7, target_bright);
 
     color = acesToneMap(color);
     color = clamp(color, 0.0, 1.0);
