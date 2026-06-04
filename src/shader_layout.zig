@@ -56,6 +56,7 @@ pub const Uniform = extern struct {
     brightness_scale: f32,
     iter_per_call: u32,
     mipmap_levels: u32,
+    coordinate_type: u32,
 };
 
 pub const set_layout = struct {

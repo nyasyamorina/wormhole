@@ -128,6 +128,7 @@ pub fn main(init: std.process.Init) !void {
                 .brightness_scale = vk_ctx.brightness_scale,
                 .iter_per_call = args.iter_per_call.value,
                 .mipmap_levels = resources.mipmap_levels,
+                .coordinate_type = controller.coordinate_type,
             });
 
             resources.drawFrame() catch |err| { may_error = err; };

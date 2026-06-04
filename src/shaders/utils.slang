@@ -19,6 +19,7 @@ struct Uniform {
     float brightness_scale;
     uint iter_per_call;
     uint mipmap_levels;
+    uint coordinate_type;
 };
 
 

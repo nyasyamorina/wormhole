@@ -71,6 +71,7 @@ pub inline fn cartesianToBallVector(p: anytype, v: @TypeOf(p)) @Vector(2, @typeI
     const x, const y, const z = p;
     const v_x, const v_y, const v_z = v;
     const sin_theta = @sqrt(sqr(x) + sqr(y));
+    if (sin_theta < 1e-10) return .{@sqrt(sqr(v_x) + sqr(v_y)), 0};
     const v_theta = -v_z / sin_theta;
     const tmp = z / sin_theta * v_theta;
     const v_phi = if (@abs(x) > @abs(y))
