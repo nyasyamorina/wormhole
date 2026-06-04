@@ -6,9 +6,9 @@ const helper = @import("helper.zig");
 const math = @import("math.zig");
 const shader_layout = @import("shader_layout.zig");
 
-const v2f32 = math.v2f32;
-const v3f32 = math.v3f32;
-const v4f32 = math.v4f32;
+const v2f64 = math.v2f64;
+const v3f64 = math.v3f64;
+const v4f64 = math.v4f64;
 const normalize = math.normalize;
 const length = math.length;
 const svm = math.svm;
@@ -43,7 +43,7 @@ pub const ScreenScale = struct {
         self.mouse_scale_v = -self.v / height;
     }
 
-    pub fn unScale(self: ScreenScale, p: [2]f32) [2]f32 {
+    pub fn unScale(self: ScreenScale, p: [2]f64) [2]f64 {
         return .{
             self.mouse_scale_u * p[0],
             self.mouse_scale_v * p[1],
@@ -55,9 +55,9 @@ pub const ScreenScale = struct {
     }
 };
 
-pub fn rotateCamera(self: *Controller, mouse_move: [2]f32, speed: f32) void {
+pub fn rotateCamera(self: *Controller, mouse_move: [2]f64, speed: f64) void {
     const move = self.screen_scale.unScale(mouse_move);
-    const rotate: v3f32 = .{move[1], 0, -move[0]};
+    const rotate: v3f64 = .{move[1], 0, -move[0]};
     const axis = normalize(rotate);
     const angle = speed * length(rotate);
     self.frame.rotateSpacial(axis, angle);
@@ -69,7 +69,7 @@ pub fn changeThrust(self: *Controller, scroll: f32) void {
 }
 
 pub fn accelerate(self: *Controller, direction: [3]i2, time_step: f32) void {
-    const d: v3f32 = .{@floatFromInt(direction[0]), @floatFromInt(direction[1]), @floatFromInt(direction[2])};
+    const d: v3f64 = .{@floatFromInt(direction[0]), @floatFromInt(direction[1]), @floatFromInt(direction[2])};
     self.frame.localLorenz(svm(std.math.sinh(time_step * self.thrust), normalize(d)));
 }
 

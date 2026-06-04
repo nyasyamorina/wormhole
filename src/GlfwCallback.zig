@@ -76,10 +76,10 @@ pub fn takeResizeInfo(self: *GlfwCallback) ?vk.Extent2D {
     self.frame_width = 0; self.frame_height = 0;
     return res;
 }
-pub fn takeMouseMove(self: *GlfwCallback) ?[2]f32 {
+pub fn takeMouseMove(self: *GlfwCallback) ?[2]f64 {
     if (self.mouse_move_x == 0 and self.mouse_move_y == 0) return null;
 
-    const res: [2]f32 = .{@floatCast(self.mouse_move_x), @floatCast(self.mouse_move_y)};
+    const res: [2]f64 = .{self.mouse_move_x, self.mouse_move_y};
     self.mouse_move_x = 0; self.mouse_move_y = 0;
     return res;
 }

@@ -49,22 +49,22 @@ pub const gravitational_constant = 6.6743015;
 pub const light_speed = 299792.458;
 
 
-pub const v2f32 = @Vector(2, f32);
-pub const v3f32 = @Vector(3, f32);
-pub const v4f32 = @Vector(4, f32);
+pub const v2f64 = @Vector(2, f64);
+pub const v3f64 = @Vector(3, f64);
+pub const v4f64 = @Vector(4, f64);
 
 /// scalar-vector multiplication
 pub fn svm(s: anytype, v: anytype) @TypeOf(v) {
     return @as(@TypeOf(v), @splat(s)) * v;
 }
 
-pub inline fn spacial(v: v4f32) v3f32 {
+pub inline fn spacial(v: v4f64) v3f64 {
     return .{v[0], v[1], v[2]};
 }
-pub inline fn temporal(v: v4f32) f32 {
+pub inline fn temporal(v: v4f64) f64 {
     return v[3];
 }
-pub inline fn spacetime(s: v3f32, t: f32) v4f32 {
+pub inline fn spacetime(s: v3f64, t: f64) v4f64 {
     return .{s[0], s[1], s[2], t};
 }
 
@@ -75,14 +75,14 @@ pub inline fn spacetime(s: v3f32, t: f32) v4f32 {
 ///
 /// the temporal axit is also the forward diretion of the whole frame in space-time.
 pub const Frame = struct {
-    position: v4f32,
-    axis_x: v4f32,
-    axis_y: v4f32,
-    axis_z: v4f32,
-    axis_t: v4f32,
+    position: v4f64,
+    axis_x: v4f64,
+    axis_y: v4f64,
+    axis_z: v4f64,
+    axis_t: v4f64,
 
     /// the Lorentz transformation of the frame
-    pub fn localLorenz(self: *Frame, direction: v3f32) void {
+    pub fn localLorenz(self: *Frame, direction: v3f64) void {
         const axis_x_local = special_relativity.lorentz(spacetime(.{1, 0, 0}, 0), direction);
         const axis_y_local = special_relativity.lorentz(spacetime(.{0, 1, 0}, 0), direction);
         const axis_z_local = special_relativity.lorentz(spacetime(.{0, 0, 1}, 0), direction);
@@ -98,10 +98,10 @@ pub const Frame = struct {
     }
 
     /// `axis`: normalized
-    pub fn rotateSpacial(self: *Frame, axis: v3f32, angle: f32) void {
-        const r_x = rotate3d(v3f32 {1, 0, 0}, axis, angle);
-        const r_y = rotate3d(v3f32 {0, 1, 0}, axis, angle);
-        const r_z = rotate3d(v3f32 {0, 0, 1}, axis, angle);
+    pub fn rotateSpacial(self: *Frame, axis: v3f64, angle: f64) void {
+        const r_x = rotate3d(v3f64 {1, 0, 0}, axis, angle);
+        const r_y = rotate3d(v3f64 {0, 1, 0}, axis, angle);
+        const r_z = rotate3d(v3f64 {0, 0, 1}, axis, angle);
         const axis_x = svm(r_x[0], self.axis_x) + svm(r_x[1], self.axis_y) + svm(r_x[2], self.axis_z);
         const axis_y = svm(r_y[0], self.axis_x) + svm(r_y[1], self.axis_y) + svm(r_y[2], self.axis_z);
         const axis_z = svm(r_z[0], self.axis_x) + svm(r_z[1], self.axis_y) + svm(r_z[2], self.axis_z);
@@ -112,11 +112,11 @@ pub const Frame = struct {
 
     pub fn toUniform(self: Frame) shader_layout.SpaceTimeFrame {
         return .{
-            .position = self.position,
-            .axis_x = self.axis_x,
-            .axis_y = self.axis_y,
-            .axis_z = self.axis_z,
-            .axis_t = self.axis_t,
+            .position = @as(@Vector(4, f32), @floatCast(self.position)),
+            .axis_x = @as(@Vector(4, f32), @floatCast(self.axis_x)),
+            .axis_y = @as(@Vector(4, f32), @floatCast(self.axis_y)),
+            .axis_z = @as(@Vector(4, f32), @floatCast(self.axis_z)),
+            .axis_t = @as(@Vector(4, f32), @floatCast(self.axis_t)),
         };
     }
 };
@@ -140,7 +140,7 @@ pub const special_relativity = struct {
     /// consider `l` applies to `spacetime(x0, t0)` gets `spacetime(x1, t1) = spacetime(γ * (β * t0 + x0), γ * (t0 + β * x0))`, then `x1 = x0 + k`,
     /// yields `spacial(B) = spacial(A) + (temporal(A) + dot(spacial(A), spacial(V)) / (temporal(V) + 1)) * spacial(V)`
     /// and `temporal(B) = temporal(A) * temporal(V) + dot(spacial(A), spacial(V))`.
-    pub fn lorentz(A: v4f32, V_spacial: v3f32) v4f32 {
+    pub fn lorentz(A: v4f64, V_spacial: v3f64) v4f64 {
         const V_temporal = @sqrt(1 + dot(V_spacial, V_spacial));
         const scale = temporal(A) + dot(spacial(A), V_spacial) / (V_temporal + 1);
         const B_spacial = spacial(A) + svm(scale, V_spacial);
@@ -149,7 +149,7 @@ pub const special_relativity = struct {
     }
 
     /// inner product (dot product)
-    pub fn inner(u: v4f32, v: v4f32) f32 {
+    pub fn inner(u: v4f64, v: v4f64) f32 {
         return temporal(u) * temporal(v) - dot(spacial(u), spacial(v));
     }
 };
@@ -164,19 +164,19 @@ pub const schwarzschild = struct {
     /// x10^30 kg
     pub const mass = schwarzschild.radius * cub(light_speed / 100000.0) / gravitational_constant * 100000;
 
-    pub fn distantTime(p: v4f32) f32 {
+    pub fn distantTime(p: v4f64) f64 {
         const r = length(spacial(p));
         const t = temporal(p);
         return t + _signChanger(schwarzschild.radius * @log(@abs(r / schwarzschild.radius - 1)));
     }
-    pub fn deltaDistantTime(p: v4f32, d: v4f32) f32 {
+    pub fn deltaDistantTime(p: v4f64, d: v4f64) f64 {
         const r = length(spacial(p));
         const dr = dot(spacial(p), spacial(d)) / r;
         return temporal(d) + _signChanger(schwarzschild.radius * dr / (r - schwarzschild.radius));
     }
 
     /// inner product (dot product)
-    pub fn inner(p: v4f32, u: v4f32, v: v4f32) f32 {
+    pub fn inner(p: v4f64, u: v4f64, v: v4f64) f64 {
         const inv_r = 1 / length(spacial(p));
         const r_11 = schwarzschild.radius * inv_r;
 
@@ -196,9 +196,9 @@ pub const schwarzschild = struct {
 
     /// a wrapper of `schwarzschild.inner`
     pub const InnerAt = struct {
-        position: v4f32,
+        position: v4f64,
 
-        pub fn call(self: schwarzschild.InnerAt, u: v4f32, v: v4f32) f32 {
+        pub fn call(self: schwarzschild.InnerAt, u: v4f64, v: v4f64) f64 {
             return schwarzschild.inner(self.position, u, v);
         }
     };
@@ -209,7 +209,7 @@ pub const schwarzschild = struct {
             at_rest,
             circular_orbit,
         };
-        pub fn init(state: InitState, p: v4f32, d: v3f32) !Frame {
+        pub fn init(state: InitState, p: v4f64, d: v3f64) !Frame {
             switch (state) {
                 .at_rest => return initAtRest(p),
                 .circular_orbit => return initCircularOrbit(p, d),
@@ -217,7 +217,7 @@ pub const schwarzschild = struct {
         }
 
         /// init frame at the circular orbit around black/white hole
-        pub fn initCircularOrbit(p: v4f32, d: v3f32) !Frame {
+        pub fn initCircularOrbit(p: v4f64, d: v3f64) !Frame {
             const s = spacial(p);
             const r = length(s);
             if (r <= 1.5 * schwarzschild.radius) {
@@ -238,7 +238,7 @@ pub const schwarzschild = struct {
             return f;
         }
         /// init frame at rest (in a short time)
-        pub fn initAtRest(p: v4f32) !Frame {
+        pub fn initAtRest(p: v4f64) !Frame {
             const r = length(spacial(p));
             if (r <= schwarzschild.radius) {
                 log.err("cannot rest inside event horizon (1x schwarzschild radius), current: {}x", .{r / schwarzschild.radius});
@@ -316,7 +316,7 @@ pub const schwarzschild = struct {
     /// the delta of the component values in transpoting `v` along `d` while maintaining `v` parallel.
     ///
     /// this is a variant of the geodesics equation.
-    pub fn deltaParallelTransport(p: v4f32, d: v4f32, v:v4f32) v4f32 {
+    pub fn deltaParallelTransport(p: v4f64, d: v4f64, v:v4f64) v4f64 {
         const inv_r = 1 / length(spacial(p));
         const r_12 = schwarzschild.radius * sqr(inv_r);
         const r_23 = sqr(schwarzschild.radius) * cub(inv_r);
@@ -349,7 +349,7 @@ pub const schwarzschild = struct {
         return res;
     }
 
-    inline fn _signChanger(x: f32) f32 {
+    inline fn _signChanger(x: anytype) @TypeOf(x) {
         return  x; // for black hole
         //return -x; // for white hole (not tested)
     }

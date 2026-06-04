@@ -31,7 +31,7 @@ pub fn main(init: std.process.Init) !void {
     defer glfw.terminate();
 
     const time_scale = args.simulation_speed.value / std.time.ns_per_s;
-    const position: math.v4f32 = .{0, args.position.value * math.schwarzschild.radius, 0, 0};
+    const position: math.v4f64 = .{0, args.position.value * math.schwarzschild.radius, 0, 0};
     var controller: Controller = .{
         .frame = try math.schwarzschild.frame.init(args.init_state.value, position, .{1, 0, 1}),
         .screen_scale = .init(args.fov_y.value),
