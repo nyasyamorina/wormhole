@@ -41,6 +41,46 @@ pub fn rotate3d(p: anytype, axis: @TypeOf(p), angle: @typeInfo(@TypeOf(p)).vecto
 }
 
 
+/// transform a point from ball (spherical surface) coord to Cartesian coord
+pub inline fn ballToCartesianPoint(p: anytype) @Vector(3, @typeInfo(@TypeOf(p)).vector.child) {
+    const theta, const phi = p;
+    return .{@sin(theta) * @cos(phi), @sin(theta) * @sin(phi), @cos(theta)};
+}
+/// transform a vector from ball (spherical surface) coord to Cartesian coord
+pub inline fn ballToCartesianVector(p: anytype, v: @TypeOf(p)) @Vector(3, @typeInfo(@TypeOf(p)).vector.child) {
+    const theta, const phi = p;
+    const v_theta, const v_phi = v;
+    const v_x = @cos(theta) * @cos(phi) * v_theta - @sin(theta) * @sin(phi) * v_phi;
+    const v_y = @cos(theta) * @sin(phi) * v_theta + @sin(theta) * @cos(phi) * v_phi;
+    const v_z = -@sin(theta) * v_theta;
+    return .{v_x, v_y, v_z};
+}
+
+/// transform a point from Cartesian coord to ball (spherical surface) coord
+///
+/// `p`: normalized
+pub inline fn cartesianToBallPoint(p: anytype) @Vector(2, @typeInfo(@TypeOf(p)).vector.child) {
+    const x, const y, const z = p;
+    return .{std.math.acos(z), std.math.atan2(y, x)};
+}
+/// transform a vector from Cartesian coord to ball (spherical surface) coord
+///
+/// `p`: normalized
+/// `d`: the tangent vector of `p` on the unit ball, ie, `dot(p,d) = 0`
+pub inline fn cartesianToBallVector(p: anytype, v: @TypeOf(p)) @Vector(2, @typeInfo(@TypeOf(p)).vector.child) {
+    const x, const y, const z = p;
+    const v_x, const v_y, const v_z = v;
+    const sin_theta = @sqrt(sqr(x) + sqr(y));
+    const v_theta = -v_z / sin_theta;
+    const tmp = z / sin_theta * v_theta;
+    const v_phi = if (@abs(x) > @abs(y))
+        (v_y - tmp * y) / x
+    else
+        (tmp * x - v_x) / y;
+    return .{v_theta, v_phi};
+}
+
+
 /// x10^30 kg
 pub const solar_mass = 1.988416;
 /// x10^-20 km^3/kg/s^2
@@ -261,26 +301,27 @@ pub const schwarzschild = struct {
             const i: InnerAt = .{ .position = f.position };
 
             const axis_t = svm(1 / @sqrt(i.call(f.axis_t, f.axis_t)), f.axis_t);
-            f.axis_t = axis_t;
 
             const axis_y_1 = f.axis_y - svm(i.call(f.axis_y, axis_t), axis_t);
             const axis_y = svm(1 / @sqrt(-i.call(axis_y_1, axis_y_1)), axis_y_1);
-            f.axis_y = axis_y;
 
             const axis_x_1 = f.axis_x - svm(i.call(f.axis_x, axis_t), axis_t);
             const axis_x_2 = axis_x_1 + svm(i.call(axis_x_1, axis_y), axis_y);
             const axis_x = svm(1 / @sqrt(-i.call(axis_x_2, axis_x_2)), axis_x_2);
-            f.axis_x = axis_x;
 
             const axis_z_1 = f.axis_z - svm(i.call(f.axis_z, axis_t), axis_t);
             const axis_z_2 = axis_z_1 + svm(i.call(axis_z_1, axis_y), axis_y);
             const axis_z_3 = axis_z_2 + svm(i.call(axis_z_2, axis_x), axis_x);
             const axis_z = svm(1 / @sqrt(-i.call(axis_z_3, axis_z_3)), axis_z_3);
+
+            f.axis_t = axis_t;
+            f.axis_y = axis_y;
+            f.axis_x = axis_x;
             f.axis_z = axis_z;
         }
 
         /// transport the whole frame forawrd in space-time, stop simulation if return false
-        pub fn forward(f: *Frame, step_size: f32) bool {
+        pub fn forward(f: *Frame, step_size: f64) bool {
             if (length(spacial(f.position)) < 0.07 * schwarzschild.radius) return false;
 
             const p1 = f.position;
@@ -340,17 +381,127 @@ pub const schwarzschild = struct {
         const c_sa_aa = r_12;
         const c_sa_sasa = -1.5 * r_12 + -0.5 * r_23;
 
-        const res = -spacetime(
+        return -spacetime(
             svm(c_sa_tt * tt + c_sa_tsa * tsa + c_sa_aa * aa + c_sa_sasa * sasa, s_11),
             c_t_tt * tt + c_t_tsa * tsa + c_t_aa * aa + c_t_sasa * sasa,
         );
-
-        //std.debug.print("p {any}\nd {any}\nv {any}\nres {any}\n", .{p, d, v, res});
-        return res;
     }
 
     inline fn _signChanger(x: anytype) @TypeOf(x) {
         return  x; // for black hole
         //return -x; // for white hole (not tested)
+    }
+};
+
+/// Ellis wormhole
+///
+/// the spacial components in ellis coordinates is similar to spherical coordinates, but in `(rho, theta, phi)` instead of `(r, theta, phi)`,
+/// and `rho` can be less than 0, note that when `rho = 0`, the space does not collapse into a point like in spherical coordinates.
+pub const ellis = struct {
+    /// the radius of the wormhole, note that this radius is located outside of space-time.
+    pub const radius = 1.0;
+
+    pub fn inner(p: v4f64, u: v4f64, v: v4f64) f64 {
+        const rho, const theta, _ = spacial(p);
+        const u_s = spacial(u); const v_s = spacial(v);
+
+        const inner_soild_angle = u_s[1]*v_s[1] + sqr(@sin(theta)) * u_s[2]*v_s[2];
+        return temporal(u)*temporal(v) - u_s[0]*v_s[0] - (sqr(rho)+sqr(ellis.radius)) * (inner_soild_angle);
+    }
+
+    /// a wrapper of `ellis.inner`
+    pub const InnerAt = struct {
+        position: v4f64,
+
+        pub fn call(self: ellis.InnerAt, u: v4f64, v: v4f64) f64 {
+            return ellis.inner(self.position, u, v);
+        }
+    };
+
+
+    pub const frame = struct {
+        pub fn initAtRest(distance: f64) Frame {
+            var f: Frame = .{
+                .position = spacetime(.{distance, 0.5 * std.math.pi, 0}, 0),
+                .axis_x = spacetime(.{0, 0, 1}, 0),
+                .axis_y = spacetime(.{-1, 0, 0}, 0),
+                .axis_z = spacetime(.{0, -1, 0}, 0),
+                .axis_t = spacetime(.{0, 0, 0}, 1),
+            };
+            normalizeAxes(&f);
+            return f;
+        }
+
+        /// axes normalization order: t -> y -> x -> z
+        pub fn normalizeAxes(f: *Frame) void {
+            const i: InnerAt = .{ .position = f.position };
+
+            const axis_t = svm(1 / @sqrt(i.call(f.axis_t, f.axis_t)), f.axis_t);
+
+            const axis_y_1 = f.axis_y - svm(i.call(f.axis_y, axis_t), axis_t);
+            const axis_y = svm(1 / @sqrt(-i.call(axis_y_1, axis_y_1)), axis_y_1);
+
+            const axis_x_1 = f.axis_x - svm(i.call(f.axis_x, axis_t), axis_t);
+            const axis_x_2 = axis_x_1 + svm(i.call(axis_x_1, axis_y), axis_y);
+            const axis_x = svm(1 / @sqrt(-i.call(axis_x_2, axis_x_2)), axis_x_2);
+
+            const axis_z_1 = f.axis_z - svm(i.call(f.axis_z, axis_t), axis_t);
+            const axis_z_2 = axis_z_1 + svm(i.call(axis_z_1, axis_y), axis_y);
+            const axis_z_3 = axis_z_2 + svm(i.call(axis_z_2, axis_x), axis_x);
+            const axis_z = svm(1 / @sqrt(-i.call(axis_z_3, axis_z_3)), axis_z_3);
+
+            f.axis_t = axis_t;
+            f.axis_y = axis_y;
+            f.axis_x = axis_x;
+            f.axis_z = axis_z;
+        }
+
+        /// transport the whole frame forawrd in space-time, stop simulation if return false
+        pub fn forward(f: *Frame, step_size: f64) void {
+            const p1 = f.position;
+            const x1 = f.axis_x;
+            const y1 = f.axis_y;
+            const z1 = f.axis_z;
+            const t1 = f.axis_t;
+            const ax1 = deltaParallelTransport(p1, t1, x1);
+            const ay1 = deltaParallelTransport(p1, t1, y1);
+            const az1 = deltaParallelTransport(p1, t1, z1);
+            const at1 = deltaParallelTransport(p1, t1, t1);
+
+            const p2 = p1 + svm(step_size * (2.0/3.0), t1);
+            const x2 = x1 + svm(step_size * (2.0/3.0), ax1);
+            const y2 = y1 + svm(step_size * (2.0/3.0), ay1);
+            const z2 = z1 + svm(step_size * (2.0/3.0), az1);
+            const t2 = t1 + svm(step_size * (2.0/3.0), at1);
+            const ax2 = deltaParallelTransport(p2, t2, x2);
+            const ay2 = deltaParallelTransport(p2, t2, y2);
+            const az2 = deltaParallelTransport(p2, t2, z2);
+            const at2 = deltaParallelTransport(p2, t2, t2);
+
+            f.position += svm(step_size * 0.25, t1) + svm(step_size * 0.75, t2);
+            f.axis_x += svm(step_size * 0.25, ax1) + svm(step_size * 0.75, ax2);
+            f.axis_y += svm(step_size * 0.25, ay1) + svm(step_size * 0.75, ay2);
+            f.axis_z += svm(step_size * 0.25, az1) + svm(step_size * 0.75, az2);
+            f.axis_t += svm(step_size * 0.25, at1) + svm(step_size * 0.75, at2);
+        }};
+
+
+    /// the delta of the component values in transpoting `v` along `d` while maintaining `v` parallel.
+    pub fn deltaParallelTransport(p: v4f64, d: v4f64, v:v4f64) v4f64 {
+        const rho, const theta, _ = spacial(p);
+        const d_s = spacial(d); const v_s = spacial(v);
+
+        const C_rho_thetatheta = -rho;
+        const C_rho_phiphi = -rho * sqr(@sin(theta));
+        const C_theta_rhotheta = rho / (sqr(rho) + sqr(ellis.radius));
+        const C_theta_phiphi = @cos(theta) * @sin(theta);
+        const C_phi_rhophi = C_theta_rhotheta;
+        const C_phi_thetaphi = @cos(theta) / @sin(theta);
+
+        return -spacetime(.{
+            C_rho_thetatheta * d_s[1]*v_s[1] + C_rho_phiphi * d_s[2]*v_s[2],
+            C_theta_rhotheta * (d_s[0]*v_s[1] + d_s[1]*v_s[0]) + C_theta_phiphi * d_s[2]*v_s[2],
+            C_phi_rhophi * (d_s[0]*v_s[2] + d_s[2]*v_s[0]) + C_phi_thetaphi * (d_s[1]*v_s[2] + d_s[2]*v_s[1]),
+        }, 0);
     }
 };

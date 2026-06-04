@@ -98,10 +98,10 @@ pub fn takeMovement(self: GlfwCallback) ?[3]i2 {
     if (direction[0] == 0 and direction[1] == 0 and direction[2] == 0) return null;
     return direction;
 }
-pub fn takeScroll(self: *GlfwCallback) ?f32 {
+pub fn takeScroll(self: *GlfwCallback) ?f64 {
     if (self.scroll_y == 0) return null;
 
-    const res: f32 = @floatCast(self.scroll_y);
+    const res = self.scroll_y;
     self.scroll_y = 0;
     return res;
 }

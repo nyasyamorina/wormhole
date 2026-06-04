@@ -31,9 +31,8 @@ pub fn main(init: std.process.Init) !void {
     defer glfw.terminate();
 
     const time_scale = args.simulation_speed.value / std.time.ns_per_s;
-    const position: math.v4f64 = .{0, args.position.value * math.schwarzschild.radius, 0, 0};
     var controller: Controller = .{
-        .frame = try math.schwarzschild.frame.init(args.init_state.value, position, .{1, 0, 1}),
+        .frame = math.ellis.frame.initAtRest(args.position.value),
         .screen_scale = .init(args.fov_y.value),
         .thrust = 0.1,
         .simulation_sub_steps = args.simulation_sub_steps.value,
@@ -57,7 +56,7 @@ pub fn main(init: std.process.Init) !void {
     var last_print_state_timestamp: std.Io.Timestamp = .{ .nanoseconds = 0 };
     helper.stdout.interface.print("\nstate:\n\x1b[s", .{}) catch {};
 
-    var simulation_stopped = false;
+    //var simulation_stopped = false;
     const simulation_start_timestamp = main_loop_timestamp;
     var simulation_timestamp = main_loop_timestamp;
 
@@ -69,7 +68,7 @@ pub fn main(init: std.process.Init) !void {
         glfw.pollEvents();
 
         const current_timestamp: std.Io.Timestamp = .now(helper.io, .real);
-        const time_step = time_scale * @as(f32, @floatFromInt(main_loop_timestamp.durationTo(current_timestamp).nanoseconds));
+        const time_step = time_scale * @as(f64, @floatFromInt(main_loop_timestamp.durationTo(current_timestamp).nanoseconds));
         main_loop_timestamp = current_timestamp;
 
         if (glfw_cb.q_pressed) {
@@ -90,19 +89,19 @@ pub fn main(init: std.process.Init) !void {
             controller.changeThrust(scroll);
         }
 
-        if (!simulation_stopped) {
+        //if (!simulation_stopped) {
             if (glfw_cb.takeMovement()) |movement| {
                 controller.accelerate(movement, time_step);
             }
             if (controller.step(time_step)) {
                 simulation_timestamp = current_timestamp;
             } else {
-                simulation_stopped = true;
+                //simulation_stopped = true;
             }
-        }
+        //}
 
         if (normalize_timestamp.durationTo(main_loop_timestamp).toSeconds() >= 10) {
-            math.schwarzschild.frame.normalizeAxes(&controller.frame);
+            math.ellis.frame.normalizeAxes(&controller.frame);
             normalize_timestamp = main_loop_timestamp;
         }
 
