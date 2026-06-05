@@ -175,6 +175,10 @@ namespace special_relativity {
         float time_comp = dot(A, float4(V_xyz, V_t));
         return float4(space_comp, time_comp);
     }
+
+    float inner(float4 u, float4 v) {
+        return u.w * v.w - dot(u.xyz, v.xyz);
+    }
 }
 
 
