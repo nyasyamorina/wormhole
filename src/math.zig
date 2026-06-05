@@ -407,7 +407,7 @@ pub const ellis = struct {
         const u_s = spacial(u); const v_s = spacial(v);
 
         const inner_soild_angle = u_s[1]*v_s[1] + sqr(@sin(theta)) * u_s[2]*v_s[2];
-        return temporal(u)*temporal(v) - u_s[0]*v_s[0] - (sqr(rho)+sqr(ellis.radius)) * (inner_soild_angle);
+        return temporal(u)*temporal(v) - u_s[0]*v_s[0] - (sqr(rho)+sqr(ellis.radius)) * inner_soild_angle;
     }
 
     /// a wrapper of `ellis.inner`

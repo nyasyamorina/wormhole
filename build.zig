@@ -39,7 +39,7 @@ pub fn build(b: *std.Build) !void {
     b.installArtifact(b.addExecutable(.{
         .name = "wormhole",
         .root_module = main_module,
-        .use_llvm = true, // for lldb debug
+        //.use_llvm = true, // for lldb debug
     }));
 
 

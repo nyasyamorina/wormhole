@@ -7,9 +7,8 @@ struct SpaceTimeFrame {
     float4 axis_z;
     float4 axis_t;
 
-    float4 rayDirection(float2 xz) {
-        float4 ray_local = spacetime(normalize(float3(xz[0], 1.0, xz[1])), -1.0);
-        return mul(ray_local, float4x4(axis_x, axis_y, axis_z, axis_t));
+    float4x4 asMatrix() {
+        return float4x4(axis_x, axis_y, axis_z, axis_t);
     }
 };
 
@@ -406,4 +405,21 @@ float temporal(float4 v) {
 }
 float4 spacetime(float3 s, float t) {
     return float4(s, t);
+}
+
+
+namespace ellis {
+    static const float radius = 1.0;
+
+    float inner4(float4 p, float4 u, float4 v) {
+        float rho = spacial(p)[0]; float theta = spacial(p)[1];
+        float3 u_s = spacial(u); float3 v_s = spacial(v);
+
+        float inner_solid_angle = u_s[1]*v_s[1] + sqr(sin(theta)) * u_s[2]*v_s[2];
+        return temporal(u)*temporal(v) - u_s[0]*v_s[0] - (sqr(rho)+sqr(ellis::radius)) * inner_solid_angle;
+    }
+
+    float inner(float rho, float3 u, float3 v) {
+        return u[2]*v[2] - u[0]*v[0] - (sqr(rho) + sqr(ellis.radius)) * u[1]*v[1];
+    }
 }

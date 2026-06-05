@@ -24,18 +24,19 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
     float2 uv = getScreenCoordinate(thread_id.xy, extent);
-    float4 ray_position = uniform.frame.position;
-    float4 ray_direction = uniform.frame.rayDirection(uv * uniform.screen_scale);
+    float2 xz = uv * uniform.screen_scale;
+    float4 ray_local = spacetime(normalize(float3(xz[0], 1.0, xz[1])), -1.0);
+    float4 ray_global = mul(ray_local, uniform.frame.asMatrix());
+    ray_global *= -1.0 / temporal(ray_global);
 
-    // scale ray direction so that its tempolar component is equal to -1
-    float ray_compression = -1.0 / temporal(ray_direction);
-    ray_direction *= ray_compression;
+    float wavelength_scale = -ellis::inner4(uniform.frame.position, uniform.frame.axis_t, ray_global);
+    float brightness_scale = sqr(wavelength_scale / (temporal(uniform.frame.axis_t) - dot(spacial(ray_local), spacial(uniform.frame.axis_t))));
 
     // convert ray in 3-D Cartesian coordinate to 2-D Cartesian coordinate
     float3 x_axis = normalize(spacial(uniform.frame.position));
-    float3 y_axis = normalize(spacial(ray_direction) - dot(spacial(ray_direction), x_axis) * x_axis);
+    float3 y_axis = normalize(spacial(ray_global) - dot(spacial(ray_global), x_axis) * x_axis);
     float2 ray_p_2d = {length(spacial(ray_position)), 0.0};
-    float2 ray_d_2d = {dot(spacial(ray_direction), x_axis), dot(spacial(ray_direction), y_axis)};
+    float2 ray_d_2d = {dot(spacial(ray_global), x_axis), dot(spacial(ray_global), y_axis)};
 
     // convert ray in 2-D Cartesian coordinate to 2-D polar coordinate
     float2[2] ray_polar = polar.fromCartesian(ray_p_2d, ray_d_2d);
