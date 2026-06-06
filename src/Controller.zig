@@ -79,6 +79,7 @@ pub fn step(self: *Controller, time_step: f64) bool {
     const step_size = time_step / @as(f64, @floatFromInt(self.simulation_sub_steps));
     for (0 .. self.simulation_sub_steps) |_| {
         math.ellis.frame.forward(&self.frame, step_size);
+        math.ellis.frame.normalizeAxes(&self.frame);
 
         // transform coordinate when approaching the poles to avoid numerical explosion
         const transform_frame = struct {
@@ -134,9 +135,9 @@ pub fn printState(self: Controller, time: i96) !void {
     const coord_time = math.temporal(self.frame.position);
     const rho = math.spacial(self.frame.position)[0];
     const v_s = math.spacial(self.frame.axis_t);
-    const v_rho = v_s[0];
+    const v_rho = -std.math.sign(rho) * v_s[0];
     const v_angle_v4 = math.spacetime(.{0, v_s[1], v_s[2]}, 0);
-    const v_angle = i.call(v_angle_v4, v_angle_v4);
+    const v_angle = -i.call(v_angle_v4, v_angle_v4);
 
     try helper.stdout.interface.print(
         std.fmt.comptimePrint("wormhole radius: {:.02} km ({:.05} l.s.)", .{math.ellis.radius * math.light_speed, math.ellis.radius}) ++ helper.line_break
@@ -149,7 +150,7 @@ pub fn printState(self: Controller, time: i96) !void {
         , .{
             @as(f32, @floatFromInt(time)) / std.time.ns_per_s,
             coord_time,
-            rho * math.light_speed, rho,
+            @abs(rho) * math.light_speed, @abs(rho),
             v_rho * math.light_speed, v_rho,
             v_angle * math.light_speed, v_angle / (sqr(rho) + sqr(math.ellis.radius)) * (180.0 / std.math.pi),
             max_err * 100,

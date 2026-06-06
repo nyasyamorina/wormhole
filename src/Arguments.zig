@@ -7,7 +7,7 @@ slangc: Option(String, "slangc", null, "slangc"),
 shader_folder: Option(String, null, 's', "shader"),
 iter_per_call: Option(u32, 500, null, "iter-pre-call"),
 fov_y: Option(f32, 60, 'f', "fov"),
-position: Option(f64, 100, 'p', "position"),
+position: Option(f64, 10, 'p', "position"),
 simulation_speed: Option(f64, 1, null, "simulation-speed"),
 simulation_sub_steps: Option(usize, 100, null, "simulation-sub-steps"),
 

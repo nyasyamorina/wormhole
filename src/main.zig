@@ -50,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
     var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.87).init else void {};
     var main_loop_timestamp: std.Io.Timestamp = .now(helper.io, .real);
 
-    var normalize_timestamp = main_loop_timestamp;
+    //var normalize_timestamp = main_loop_timestamp;
 
     var print_state_failed = false;
     var last_print_state_timestamp: std.Io.Timestamp = .{ .nanoseconds = 0 };
@@ -100,10 +100,10 @@ pub fn main(init: std.process.Init) !void {
             }
         //}
 
-        if (normalize_timestamp.durationTo(main_loop_timestamp).toSeconds() >= 10) {
-            math.ellis.frame.normalizeAxes(&controller.frame);
-            normalize_timestamp = main_loop_timestamp;
-        }
+        //if (normalize_timestamp.durationTo(main_loop_timestamp).toSeconds() >= 10) {
+        //    math.ellis.frame.normalizeAxes(&controller.frame);
+        //    normalize_timestamp = main_loop_timestamp;
+        //}
 
         if (!print_state_failed and last_print_state_timestamp.durationTo(main_loop_timestamp).toMilliseconds() >= 500) {
             if (printStateTick(controller, simulation_start_timestamp.durationTo(simulation_timestamp).nanoseconds, timer)) {

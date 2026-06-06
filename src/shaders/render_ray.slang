@@ -38,6 +38,7 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     float3 p_ball =   cos(ray_position[1]) * x_axis + sin(ray_position[1]) * y_axis;
     float3 v_ball = (-sin(ray_position[1]) * x_axis + cos(ray_position[1]) * y_axis) * ray_direction[1];
     float3 ray_direction_spacial = normalize(p_ball * ray_direction[0] + v_ball * ray_position[0]);
+    if (uniform.coordinate_type == 1) ray_direction_spacial = ray_direction_spacial.zxy;
 
     float3 color;
     if (ray_position[0] > 0.0) {
@@ -161,7 +162,7 @@ float3 renderExoticCelestialSphere(float3 direction, float wavelength_scale) {
     const uint volsteps = 20;
     const float stepsize = 0.1;
     const float tile = 0.85;
-    const float brightness = 7.5e-7;
+    const float brightness = 5e-7;
     const float distfading = 0.83;
     const float3 from = {1.0, 0.5, 0.0};
 

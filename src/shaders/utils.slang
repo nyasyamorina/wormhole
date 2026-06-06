@@ -377,7 +377,12 @@ namespace ellis {
     }
 
     /// the delta of the component values in transpoting `v` along `d` while maintaining `v` parallel.
-    float3 deltaParallelTransport(float rho, float3 d, float3 v) {
-        return 0.0;
+    float2 deltaParallelTransport(float rho, float2 d, float2 v) {
+        float C_rho_aa = -rho;
+        float C_a_rhoa = rho / (sqr(rho) + sqr(ellis::radius));
+        return -float2(
+            C_rho_aa * d[1]*v[1],
+            C_a_rhoa * (d[0]*v[1] + d[1]*v[0]),
+        );
     }
 }
