@@ -8,10 +8,10 @@ ConstantBuffer<Uniform> uniform;
 RWTexture2D<float4, 1> ray_tex;
 
 [vk_binding(1, 1)]
-RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_compression_tex;
+RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_scale_tex;
 
 [vk_binding(2, 1)]
-RWTexture2D<float4, 1> ray_tag_tex;
+RWTexture2D<float4, 1> _unused_3;
 
 [vk_binding(3, 1)]
 RWTexture2D<float4, 1> color_output_tex;
@@ -23,46 +23,29 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     color_output_tex.GetDimensions(extent.x, extent.y);
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
-    RayTag ray_tag = bit_cast<RayTag>(ray_tag_tex.Load(thread_id.xy)[0]);
+    float4 ray = ray_tex.Load(thread_id.xy);
+    float2 ray_position = ray.xy;
+    float2 ray_direction = ray.zw;
+    float4 ray_plane_y_axis_and_ray_scale = ray_plane_y_axis_and_ray_scale_tex.Load(thread_id.xy);
+    float3 y_axis = ray_plane_y_axis_and_ray_scale.xyz;
+    float ray_scale = ray_plane_y_axis_and_ray_scale.w;
 
-    float4 ray_polar = ray_tex.Load(thread_id.xy);
-    float4 ray_plane_y_axis_and_ray_compression = ray_plane_y_axis_and_ray_compression_tex.Load(thread_id.xy);
+    float wavelength_scale = ray_scale;
+    float brightness_scale = sqr(sqr(ray_scale));
 
-    // convert ray from 2-D polar coordinate to 2-D Cartesian coordinate
-    float2[2] ray_2d = polar.toCartesian(ray_polar.xy, ray_polar.zw);
-    float2 ray_p_2d = ray_2d[0];
-    float2 ray_d_2d = ray_2d[1];
-
-    // convert ray from 2-D Cartesian coordinate to 3-D Cartesian coordinate
-    float3 x_axis = normalize(spacial(uniform.frame.position));
-    float3 y_axis = ray_plane_y_axis_and_ray_compression.xyz;
-    float3 ray_position  = ray_p_2d.x * x_axis + ray_p_2d.y * y_axis;
-    float3 ray_direction = ray_d_2d.x * x_axis + ray_d_2d.y * y_axis;
-
-    // note that the Doppler effect in relativity is purely cause by coordinate transformation,
-    // because `ray` has 0 space-time length, `k * ray` also has 0 space-time length, where `k` is any real number,
-    // although `k * any` is a valid ray, and has the same direction as `ray`, but its time component is changed,
-    // and that is what cause the wavelength of light changed.
-    // because we are sending light "back in time", the time component is negative.
-    float wave_length_scale = ray_plane_y_axis_and_ray_compression.w;
-    wave_length_scale *= 1.0 - schwarzschild::radius / ray_polar[0]; // correction for the finite simulation
+    // convert from 2-D Ellis coordinates to 3-D Cartesian coordinates
+    float3 x_axis = ball::toCartesianPoint(spacial(uniform.frame.position).yz);
+    float3 p_ball =   cos(ray_position[1]) * x_axis + sin(ray_position[1]) * y_axis;
+    float3 v_ball = (-sin(ray_position[1]) * x_axis + cos(ray_position[1]) * y_axis) * ray_direction[1];
+    float3 ray_direction_spacial = normalize(p_ball * ray_direction[0] + v_ball * ray_position[0]);
 
     float3 color;
-
-    if (/*ray_tag == RayTag::NotExist ||*/ ray_tag == RayTag::Catptured) {
-        color = 0.0;
-    //} else if (ray_tag == RayTag::Invalid) {
-    //    color = {1.0, 0.0, 0.0};
-    } else if (ray_polar[0] <= 1.0 * schwarzschild::radius) {
-        // after falling into the black hole, the light in front of observer is coming from
-        // the region between event horizon and the current position of the observer
-        color = {0.0, 0.0, 0.0};
-    } /*else if (ray_polar[0] <= 10.0 * schwarzschild::radius) {
-        // just a warning for the light simulation not "finished"
-        color = {0.0, 0.0, 0.5};
-    }*/ else {
-        color = renderCelestialSphere(normalize(ray_direction), wave_length_scale);
+    if (ray_position[0] > 0.0) {
+        color = renderCelestialSphere(ray_direction_spacial, wavelength_scale);
+    } else {
+        color = renderExoticCelestialSphere(ray_direction_spacial, wavelength_scale);
     }
+    color *= brightness_scale;
 
     color_output_tex.Store(thread_id.xy, float4(max(0.0, color), 1.0));
 }
@@ -80,7 +63,7 @@ float starfieldBright(float3 direction) {
     noise += amplitude_2 * simplexNoise3(direction * scale2);
     noise += amplitude_3 * simplexNoise3(direction * scale3);
     float base = max(0.0, noise * 0.5 + 0.5);
-    return cub(cub(base));
+    return 1.2 * cub(cub(base));
 }
 
 float starfieldTemp(float3 direction) {
@@ -142,31 +125,29 @@ float noiseToTemp(float noise) {
     return 1.0 / mired;
 }
 
-float3 renderBlackBody(float bright, float temp, float wave_length_scale) {
+float3 renderBlackBody(float bright, float temp, float wavelength_scale) {
     // normalize the black body radiation to target brightness
     bright /= black_body::luminance(temp);
 
     // in black body radiation, wavelength scaling can be calculated by scaling temperature and brightness instead.
-    // `B(λ,T) dλ -> B(sλ,T) d(sλ) = B(λ,sT)/s^4 dλ`
-    bright /= sqr(sqr(wave_length_scale));
-    temp *= wave_length_scale;
-
-    return bright * black_body::color(temp);
+    // `B(sλ,T) = B(λ,sT)/s^5`
+    float bright_scale = sqr(sqr(wavelength_scale)) * wavelength_scale;
+    return bright / bright_scale * black_body::color(temp * wavelength_scale);
 }
 
 /// `direction`: normalized
-float3 renderCelestialSphere(float3 direction, float wave_length_scale) {
+float3 renderCelestialSphere(float3 direction, float wavelength_scale) {
     float3 color = 0.0;
 
     // starfield
     float starfield_bright = starfieldBright(direction);
     float starfield_temp = starfieldTemp(direction);
-    color += renderBlackBody(starfield_bright, starfield_temp, wave_length_scale);
+    color += renderBlackBody(starfield_bright, starfield_temp, wavelength_scale);
 
     // nebula
     float nebula_bright = nebulaBright(direction);
     float nebula_temp = nebulaTemp(direction);
-    color += 0.3 * renderBlackBody(nebula_bright, nebula_temp, wave_length_scale);
+    color += 0.3 * renderBlackBody(nebula_bright, nebula_temp, wavelength_scale);
 
     return color;
 }
@@ -174,7 +155,7 @@ float3 renderCelestialSphere(float3 direction, float wave_length_scale) {
 
 /// modified from "https://www.shadertoy.com/view/XlfGRj"
 /// `direction`: normalized
-float3 renderExoticCelestialSphere(float3 direction, float wave_length_scale) {
+float3 renderExoticCelestialSphere(float3 direction, float wavelength_scale) {
     const uint iterations = 17;
     const float formuparam = 0.53;
     const uint volsteps = 20;
@@ -196,7 +177,7 @@ float3 renderExoticCelestialSphere(float3 direction, float wave_length_scale) {
             pa = length(p);
         }
         a *= a * a;
-        color += fade * renderStarNest(0.5 * s, a / (1e-5 * a + 1.0), wave_length_scale);
+        color += fade * renderStarNest(0.5 * s, a / (1e-5 * a + 1.0), wavelength_scale);
         fade *= distfading;
         s += stepsize;
     }
@@ -204,11 +185,11 @@ float3 renderExoticCelestialSphere(float3 direction, float wave_length_scale) {
     return color * sqrt(color);
 }
 
-float3 renderStarNest(float s, float a, float wave_length_scale) {
+float3 renderStarNest(float s, float a, float wavelength_scale) {
     float3 color = 0.0;
     float wavelength = cie::table_wave_length_begin;
     for (uint k = 0; k < cie::XYZ_table.getCount(); k++) {
-        color += cie::XYZ_table[k] * startNestSpetrum(wavelength * wave_length_scale, s, 0.01 * a);
+        color += cie::XYZ_table[k] * startNestSpetrum(wavelength * wavelength_scale, s, 0.01 * a);
         wavelength += cie::table_wave_length_step;
     }
     return a * cie::table_wave_length_step * cie::XYZ_to_linear_sRGB(color);

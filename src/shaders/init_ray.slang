@@ -8,10 +8,10 @@ ConstantBuffer<Uniform> uniform;
 RWTexture2D<float4, 1> ray_tex;
 
 [vk_binding(1, 1)]
-RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_compression_tex;
+RWTexture2D<float4, 1> ray_plane_y_axis_and_ray_scale_tex;
 
 [vk_binding(2, 1)]
-RWTexture2D<float4, 1> ray_tag_tex;
+RWTexture2D<float4, 1> _unused_3;
 
 [vk_binding(3, 1)]
 RWTexture2D<float4, 1> _unused_4;
@@ -27,23 +27,15 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     float2 xz = uv * uniform.screen_scale;
     float4 ray_local = spacetime(normalize(float3(xz[0], 1.0, xz[1])), -1.0);
     float4 ray_global = mul(ray_local, uniform.frame.asMatrix());
-    ray_global *= -1.0 / temporal(ray_global);
+    float ray_scale = -1.0 / temporal(ray_global);
+    ray_global *= ray_scale;
 
-    float wavelength_scale = -ellis::inner4(uniform.frame.position, uniform.frame.axis_t, ray_global);
-    float brightness_scale = sqr(wavelength_scale / (temporal(uniform.frame.axis_t) - dot(spacial(ray_local), spacial(uniform.frame.axis_t))));
+    // convert from 3-D Ellis coordinates to 2-D Ellis coordinates
+    float3 v_ball = ball::toCartesianVector(spacial(uniform.frame.position).yz, spacial(ray_global).yz);
+    float3 y_axis = normalize(v_ball);
+    float2 ray_position = {spacial(uniform.frame.position)[0], 0.0};
+    float2 ray_direction = {spacial(ray_global)[0], length(v_ball)};
 
-    // convert ray in 3-D Cartesian coordinate to 2-D Cartesian coordinate
-    float3 x_axis = normalize(spacial(uniform.frame.position));
-    float3 y_axis = normalize(spacial(ray_global) - dot(spacial(ray_global), x_axis) * x_axis);
-    float2 ray_p_2d = {length(spacial(ray_position)), 0.0};
-    float2 ray_d_2d = {dot(spacial(ray_global), x_axis), dot(spacial(ray_global), y_axis)};
-
-    // convert ray in 2-D Cartesian coordinate to 2-D polar coordinate
-    float2[2] ray_polar = polar.fromCartesian(ray_p_2d, ray_d_2d);
-
-    RayTag tag = RayTag::None;
-
-    ray_tex.Store(thread_id.xy, float4(ray_polar[0], ray_polar[1]));
-    ray_plane_y_axis_and_ray_compression_tex.Store(thread_id.xy, float4(y_axis, ray_compression));
-    ray_tag_tex.Store(thread_id.xy, float4(bit_cast<float>(tag), 0.0, 0.0, 0.0));
+    ray_tex.Store(thread_id.xy, float4(ray_position, ray_direction));
+    ray_plane_y_axis_and_ray_scale_tex.Store(thread_id.xy, float4(y_axis, ray_scale));
 }
