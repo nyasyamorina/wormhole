@@ -8,7 +8,7 @@ ConstantBuffer<Uniform> uniform;
 RWTexture2D<float4> ray_direction_tex;
 
 [vk_binding(1, 1)]
-RWTexture2D<float4> wavelength_brightness_scale_tex;
+RWTexture2D<float4> _unused_2;
 
 [vk_binding(2, 1)]
 RWTexture2D<float4> _unused_3;
@@ -27,9 +27,10 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     if (thread_id.x >= extent.x || thread_id.y >= extent.y) return;
 
     float4 ray = ray_direction_tex.Load(thread_id.xy);
-    float2 wavelength_brightness_scale = wavelength_brightness_scale_tex.Load(thread_id.xy).xy;
-    float wavelength_scale = wavelength_brightness_scale[0];
-    float brightness_scale = wavelength_brightness_scale[1];
+    float scale = -1.0 / ray.w;
+    ray *= scale;
+    float wavelength_scale = scale;
+    float brightness_scale = sqr(sqr(scale));
 
     float3 color = 0.0;
 
