@@ -259,8 +259,7 @@ fn buildPipelines(vk_ctx: *VulkanContext, slangc: []const u8, shader_folder: ?[]
 
         const spv_file = shader_dir.openFile(helper.io, spv_file_name, .{}) catch |err| switch (err) {
             error.FileNotFound => blk: {
-                const compile_cwd = if (helper.is_windows) shader_folder orelse "" else shader_dir;
-                try compileSlangShader(compile_cwd, slangc, stage, spv_file_name);
+                try compileSlangShader(shader_dir, slangc, stage, spv_file_name);
                 break :blk try shader_dir.openFile(helper.io, spv_file_name, .{});
             },
             else => return err,
