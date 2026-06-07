@@ -38,7 +38,7 @@ void main(uint3 thread_id: SV_DispatchThreadID) {
     float3 p_ball =   cos(ray_position[1]) * x_axis + sin(ray_position[1]) * y_axis;
     float3 v_ball = (-sin(ray_position[1]) * x_axis + cos(ray_position[1]) * y_axis) * ray_direction[1];
     float3 ray_direction_spacial = normalize(p_ball * ray_direction[0] + v_ball * ray_position[0]);
-    if (uniform.coordinate_type == 1) ray_direction_spacial = ray_direction_spacial.zxy;
+    ray_direction_spacial = mul(ray_direction_spacial, uniform.sub_frame.asMatrix());
 
     float3 color;
     if (ray_position[0] > 0.0) {

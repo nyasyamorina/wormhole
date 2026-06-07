@@ -484,7 +484,62 @@ pub const ellis = struct {
             f.axis_y += svm(step_size * 0.25, ay1) + svm(step_size * 0.75, ay2);
             f.axis_z += svm(step_size * 0.25, az1) + svm(step_size * 0.75, az2);
             f.axis_t += svm(step_size * 0.25, at1) + svm(step_size * 0.75, at2);
-        }};
+        }
+
+
+        pub const SubFrame = struct {
+            axis_x: v3f64 = .{1, 0, 0},
+            axis_y: v3f64 = .{0, 1, 0},
+            axis_z: v3f64 = .{0, 0, 1},
+
+            /// extract the `theta` motion from `Frame` to `SubFrame`
+            pub fn recalculateBallComponents(self:*SubFrame, f: *Frame) void {
+                _, const theta, const phi = spacial(f.position);
+                _, const x_theta, const x_phi = spacial(f.axis_x);
+                _, const y_theta, const y_phi = spacial(f.axis_y);
+                _, const z_theta, const z_phi = spacial(f.axis_z);
+                _, const t_theta, const t_phi = spacial(f.axis_t);
+                if (t_theta == 0) return;
+
+                const p_ball = ballToCartesianPoint(v2f64 {theta, phi});
+                const x_ball = ballToCartesianVector(v2f64 {theta, phi}, .{x_theta, x_phi});
+                const y_ball = ballToCartesianVector(v2f64 {theta, phi}, .{y_theta, y_phi});
+                const z_ball = ballToCartesianVector(v2f64 {theta, phi}, .{z_theta, z_phi});
+                const t_ball = ballToCartesianVector(v2f64 {theta, phi}, .{t_theta, t_phi});
+
+                const new_axis_x = p_ball;
+                const new_axis_y = normalize(t_ball);
+                const new_axis_z = cross(new_axis_x, new_axis_y);
+
+                const new_p_ball = v3f64 {1, 0, 0};
+                const new_x_ball = v3f64 {dot(x_ball, new_axis_x), dot(x_ball, new_axis_y), dot(x_ball, new_axis_z)};
+                const new_y_ball = v3f64 {dot(y_ball, new_axis_x), dot(y_ball, new_axis_y), dot(y_ball, new_axis_z)};
+                const new_z_ball = v3f64 {dot(z_ball, new_axis_x), dot(z_ball, new_axis_y), dot(z_ball, new_axis_z)};
+                const new_t_ball = v3f64 {0, length(t_ball), 0};
+
+                const new_sub_x = svm(new_axis_x[0], self.axis_x) + svm(new_axis_x[1], self.axis_y) + svm(new_axis_x[2], self.axis_z);
+                const new_sub_y = svm(new_axis_y[0], self.axis_x) + svm(new_axis_y[1], self.axis_y) + svm(new_axis_y[2], self.axis_z);
+                const new_sub_z = svm(new_axis_z[0], self.axis_x) + svm(new_axis_z[1], self.axis_y) + svm(new_axis_z[2], self.axis_z);
+                self.axis_x = new_sub_x; self.axis_y = new_sub_y; self.axis_z = new_sub_z;
+
+                comptime std.debug.assert(temporal(spacetime(.{0, 1, 2}, 3)) == 3);
+                f.position[1] = std.math.pi * 0.5; f.position[2] = 0;
+                f.axis_x[1], f.axis_x[2] = cartesianToBallVector(new_p_ball, new_x_ball);
+                f.axis_y[1], f.axis_y[2] = cartesianToBallVector(new_p_ball, new_y_ball);
+                f.axis_z[1], f.axis_z[2] = cartesianToBallVector(new_p_ball, new_z_ball);
+                f.axis_t[1] = 0; f.axis_t[2] = length(t_ball);
+                _ = new_t_ball;
+            }
+
+            pub fn toUniform(self: SubFrame) shader_layout.SubFrame {
+                return .{
+                    .axis_x = @as(@Vector(3, f32), @floatCast(self.axis_x)),
+                    .axis_y = @as(@Vector(3, f32), @floatCast(self.axis_y)),
+                    .axis_z = @as(@Vector(3, f32), @floatCast(self.axis_z)),
+                };
+            }
+        };
+    };
 
 
     /// the delta of the component values in transpoting `v` along `d` while maintaining `v` parallel.

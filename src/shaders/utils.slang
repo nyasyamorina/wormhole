@@ -12,13 +12,22 @@ struct SpaceTimeFrame {
     }
 };
 
+struct SubFrame {
+    float3 axis_x;
+    float3 axis_y;
+    float3 axis_z;
+
+    float3x3 asMatrix() {
+        return float3x3(axis_x, axis_y, axis_z);
+    }
+};
 struct Uniform {
     SpaceTimeFrame frame;
+    SubFrame sub_frame;
     float2 screen_scale;
     float brightness_scale;
     uint iter_per_call;
     uint mipmap_levels;
-    uint coordinate_type;
 };
 
 

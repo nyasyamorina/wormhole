@@ -50,13 +50,18 @@ pub const SpaceTimeFrame = extern struct {
     axis_t: [4]f32 align(16),
 };
 
+pub const SubFrame = extern struct {
+    axis_x: [3]f32 align(16),
+    axis_y: [3]f32 align(16),
+    axis_z: [3]f32 align(16),
+};
 pub const Uniform = extern struct {
     frame: SpaceTimeFrame,
+    sub_frame: SubFrame,
     screen_scale: [2]f32 align(8),
     brightness_scale: f32,
     iter_per_call: u32,
     mipmap_levels: u32,
-    coordinate_type: u32,
 };
 
 pub const set_layout = struct {

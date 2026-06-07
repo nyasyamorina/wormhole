@@ -16,11 +16,11 @@ const svm = math.svm;
 
 
 frame: math.Frame,
+sub_frame: math.ellis.frame.SubFrame = .{},
 screen_scale: ScreenScale,
 /// in local coord
 thrust: f64,
 simulation_sub_steps: usize,
-coordinate_type: u1 = 0,
 
 
 const Controller = @This();
@@ -73,47 +73,12 @@ pub fn changeThrust(self: *Controller, scroll: f64) void {
 pub fn accelerate(self: *Controller, direction: [3]i2, time_step: f64) void {
     const d: v3f64 = .{@floatFromInt(direction[0]), @floatFromInt(direction[1]), @floatFromInt(direction[2])};
     self.frame.localLorenz(svm(std.math.sinh(time_step * self.thrust), normalize(d)));
+    self.sub_frame.recalculateBallComponents(&self.frame);
 }
 
-pub fn step(self: *Controller, time_step: f64) bool {
+pub fn step(self: *Controller, time_step: f64) void {
     const step_size = time_step / @as(f64, @floatFromInt(self.simulation_sub_steps));
-    for (0 .. self.simulation_sub_steps) |_| {
-        math.ellis.frame.forward(&self.frame, step_size);
-        math.ellis.frame.normalizeAxes(&self.frame);
-
-        // transform coordinate when approaching the poles to avoid numerical explosion
-        const transform_frame = struct {
-            inline fn ball(v: v4f64) v2f64 {
-                return .{math.spacial(v)[1], math.spacial(v)[2]};
-            }
-            inline fn setBall(v: *v4f64, b: v2f64) void {
-                comptime std.debug.assert(std.simd.countTrues(math.spacial(.{0, 1, 2, 3}) == v3f64 {0, 1, 2}) > 0);
-                v[1] = b[0]; v[2] = b[1];
-            }
-            fn transAxes(v: v3f64, old_type: u1) v3f64 {
-                return if (old_type == 0) .{v[1], v[2], v[0]} else .{v[2], v[0], v[1]};
-            }
-            fn call(frame: *math.Frame, old_type: u1) void {
-                const p_old_b = ball(frame.position);
-                const p_old = math.ballToCartesianPoint(p_old_b);
-                const x_old = math.ballToCartesianVector(p_old_b, ball(frame.axis_x));
-                const y_old = math.ballToCartesianVector(p_old_b, ball(frame.axis_y));
-                const z_old = math.ballToCartesianVector(p_old_b, ball(frame.axis_z));
-                const t_old = math.ballToCartesianVector(p_old_b, ball(frame.axis_t));
-                const p_new = transAxes(p_old, old_type);
-                setBall(&frame.position, math.cartesianToBallPoint(p_new));
-                setBall(&frame.axis_x, math.cartesianToBallVector(p_new, transAxes(x_old, old_type)));
-                setBall(&frame.axis_y, math.cartesianToBallVector(p_new, transAxes(y_old, old_type)));
-                setBall(&frame.axis_z, math.cartesianToBallVector(p_new, transAxes(z_old, old_type)));
-                setBall(&frame.axis_t, math.cartesianToBallVector(p_new, transAxes(t_old, old_type)));
-            }
-        };
-        if (@sin(math.spacial(self.frame.position)[1]) < 0.08) {
-            transform_frame.call(&self.frame, self.coordinate_type);
-            self.coordinate_type +%= 1;
-        }
-    }
-    return true;
+    for (0 .. self.simulation_sub_steps) |_| math.ellis.frame.forward(&self.frame, step_size);
 }
 
 
@@ -143,8 +108,8 @@ pub fn printState(self: Controller, time: i96) !void {
         std.fmt.comptimePrint("wormhole radius: {:.02} km ({:.05} l.s.)", .{math.ellis.radius * math.light_speed, math.ellis.radius}) ++ helper.line_break
         ++ "time: {:.05} s" ++ helper.clear_line_and_break
         ++ "distamt time: {:.05}s" ++ helper.clear_line_and_break
-        ++ "distance to wormhole: {:.02} km ({:05} l.s.)" ++ helper.clear_line_and_break
-        ++ "speed toward wormhole: {:.02} km/s ({:05}x speed of light)" ++ helper.clear_line_and_break
+        ++ "distance to wormhole: {:.02} km ({:.05} l.s.)" ++ helper.clear_line_and_break
+        ++ "speed toward wormhole: {:.02} km/s ({:.05}x speed of light)" ++ helper.clear_line_and_break
         ++ "angular speed: {:.02} km/s ({:.05} deg/s)" ++ helper.clear_line_and_break
         ++ "maximum simulation error: {:.03}%" ++ helper.clear_line_and_break
         , .{

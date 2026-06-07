@@ -50,13 +50,10 @@ pub fn main(init: std.process.Init) !void {
     var timer = if (helper.is_debug) helper.Timer(&.{.loop, .frame}, 0.87).init else void {};
     var main_loop_timestamp: std.Io.Timestamp = .now(helper.io, .real);
 
-    //var normalize_timestamp = main_loop_timestamp;
-
     var print_state_failed = false;
     var last_print_state_timestamp: std.Io.Timestamp = .{ .nanoseconds = 0 };
     helper.stdout.interface.print("\nstate:\n\x1b[s", .{}) catch {};
 
-    //var simulation_stopped = false;
     const simulation_start_timestamp = main_loop_timestamp;
     var simulation_timestamp = main_loop_timestamp;
 
@@ -89,21 +86,11 @@ pub fn main(init: std.process.Init) !void {
             controller.changeThrust(scroll);
         }
 
-        //if (!simulation_stopped) {
-            if (glfw_cb.takeMovement()) |movement| {
-                controller.accelerate(movement, time_step);
-            }
-            if (controller.step(time_step)) {
-                simulation_timestamp = current_timestamp;
-            } else {
-                //simulation_stopped = true;
-            }
-        //}
-
-        //if (normalize_timestamp.durationTo(main_loop_timestamp).toSeconds() >= 10) {
-        //    math.ellis.frame.normalizeAxes(&controller.frame);
-        //    normalize_timestamp = main_loop_timestamp;
-        //}
+        if (glfw_cb.takeMovement()) |movement| {
+            controller.accelerate(movement, time_step);
+        }
+        controller.step(time_step);
+        simulation_timestamp = current_timestamp;
 
         if (!print_state_failed and last_print_state_timestamp.durationTo(main_loop_timestamp).toMilliseconds() >= 500) {
             if (printStateTick(controller, simulation_start_timestamp.durationTo(simulation_timestamp).nanoseconds, timer)) {
@@ -124,11 +111,11 @@ pub fn main(init: std.process.Init) !void {
 
             try resources.setUniform(.{
                 .frame = controller.frame.toUniform(),
+                .sub_frame = controller.sub_frame.toUniform(),
                 .screen_scale = controller.screen_scale.toUniform(),
                 .brightness_scale = vk_ctx.brightness_scale,
                 .iter_per_call = args.iter_per_call.value,
                 .mipmap_levels = resources.mipmap_levels,
-                .coordinate_type = controller.coordinate_type,
             });
 
             resources.drawFrame() catch |err| { may_error = err; };
