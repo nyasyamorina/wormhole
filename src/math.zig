@@ -421,6 +421,15 @@ pub const ellis = struct {
 
 
     pub const frame = struct {
+        pub fn init(distance: f64, speed: f64) !Frame {
+            if (distance != 0 and speed != 0) {
+                log.err("movement with speed is not 0 only confined at wormhole surface (position = 0)", .{});
+                return error.InvalidArgument;
+            }
+
+            return if (distance != 0) initAtRest(distance) else initCircularOrbit(speed);
+        }
+
         pub fn initAtRest(distance: f64) Frame {
             var f: Frame = .{
                 .position = spacetime(.{distance, 0.5 * std.math.pi, 0}, 0),
@@ -428,6 +437,17 @@ pub const ellis = struct {
                 .axis_y = spacetime(.{-1, 0, 0}, 0),
                 .axis_z = spacetime(.{0, -1, 0}, 0),
                 .axis_t = spacetime(.{0, 0, 0}, 1),
+            };
+            normalizeAxes(&f);
+            return f;
+        }
+        pub fn initCircularOrbit(speed: f64) Frame {
+            var f: Frame = .{
+                .position = spacetime(.{0, 0.5 * std.math.pi, 0}, 0),
+                .axis_x = spacetime(.{1, 0, 0}, 0),
+                .axis_y = spacetime(.{0, 0, 1}, 0),
+                .axis_z = spacetime(.{0, -1, 0}, 0),
+                .axis_t = spacetime(.{0, 0, speed}, @sqrt(sqr(1/ellis.radius) + sqr(speed))),
             };
             normalizeAxes(&f);
             return f;

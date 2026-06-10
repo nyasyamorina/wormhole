@@ -32,7 +32,7 @@ pub fn main(init: std.process.Init) !void {
 
     const time_scale = args.simulation_speed.value / std.time.ns_per_s;
     var controller: Controller = .{
-        .frame = math.ellis.frame.initAtRest(args.position.value),
+        .frame = try math.ellis.frame.init(args.position.value, args.speed.value),
         .screen_scale = .init(args.fov_y.value),
         .thrust = 0.1,
         .simulation_sub_steps = args.simulation_sub_steps.value,
