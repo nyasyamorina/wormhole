@@ -82,9 +82,11 @@ The program itself (`wormhole.exe` or `wormhole`) is insufficient to run, extern
 
 - `--slangc="path/to/slangc"`: Specifies the slang compiler path (see below). Default: "slangc",
 
-- `-f=<>` or `--fov=<>`: Specifies the field of view (vertical), in degrees. Default: 60.
+- `-f=<>` or `--fov=<>`: Specifies the field of view (vertical), Unit: degrees. Default: 60.
 
 - `-p=<>` or `--posotion=<>`: Specifies the initial distance from the wormhole, Unit: wormhole radius. Default: 10.
+
+- `-v=<>` or `--speed=<>`: Specifies the initial angular velocity. When this value is non-zero, `--position` must be 0 because the confined non-stationary trajectories are only the circular trajectories on the wormhole surface. Unit: radians. Default: 0.
 
 - `--simulation-speed=<>`: Controls the ratio of simulation time speed to real-world time speed. Default: 1.
 
